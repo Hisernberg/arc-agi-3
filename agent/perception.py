@@ -39,7 +39,7 @@ __all__ = [
     "to_grid", "to_frames", "norm_action", "action_label", "frame_delta", "delta_text", "Delta",
     "detect_scale", "Comp", "Segmentation", "segment", "ObjEvent", "object_diff", "HudTracker",
     "AvatarTracker", "ClickCandidate", "rank_click_candidates", "candidates_text", "animation_summary",
-    "Percept", "Perceiver", "describe", "masked_hash", "DIR_NAMES",
+    "Percept", "Perceiver", "describe", "masked_hash", "approx_tokens", "click_point", "DIR_NAMES",
 ]
 
 H = W = 64
@@ -250,8 +250,8 @@ def _edge_hist(g: np.ndarray, ignore: Optional[np.ndarray] = None) -> tuple[np.n
     vr[1:] = dv.sum(axis=1)
     # HUD strips live on the outermost lines and are drawn at display resolution; long straight
     # separators (panel borders, split backgrounds) need not sit on the camera grid either.
-    hc[[1, -1]] = 0
-    vr[[1, -1]] = 0
+    hc[[1, 2, -2, -1]] = 0
+    vr[[1, 2, -2, -1]] = 0
     hc[hc >= 0.75 * g.shape[0]] = 0
     vr[vr >= 0.75 * g.shape[1]] = 0
     return hc, vr
@@ -471,6 +471,8 @@ class ObjEvent:
             return f"recolor {c.w}x{c.h} c{self.color}>c{self.new_color} @(x{c.c0},y{c.r0})"
         if self.kind == "resized":
             b, a = self.before, self.after
+            if (b.w, b.h) == (a.w, a.h):
+                return f"reshape c{self.color} {a.w}x{a.h} {b.n}>{a.n}px @(x{a.c0},y{a.r0})"
             return f"resize c{self.color} {b.w}x{b.h}>{a.w}x{a.h} @(x{a.c0},y{a.r0})"
         if self.kind == "spawned":
             return f"new {c.short()} @(x{c.c0},y{c.r0})"
@@ -535,7 +537,10 @@ def object_diff(seg_a: Segmentation, seg_b: Segmentation, changed: np.ndarray, m
         if best is not None:
             used_a.add(a.id)
             used_b.add(best[1].id)
-            events.append(ObjEvent("resized", a.color, a, best[1]))
+            b = best[1]
+            if a.bbox == b.bbox and min(a.n, b.n) >= 48:
+                continue  # a large region re-shaped by something moving over it: not an object event
+            events.append(ObjEvent("resized", a.color, a, b))
     for a in A:
         if a.id not in used_a:
             events.append(ObjEvent("despawned", a.color, a, None))
@@ -561,7 +566,7 @@ class HudBar:
     start: int  # along-axis extent [start, end]
     end: int
     ticks: int = 1
-    confirmed: bool = False
+    last_step: int = 0
 
     def region(self) -> np.ndarray:
         m = np.zeros((H, W), bool)
@@ -573,29 +578,33 @@ class HudBar:
 
     def text(self) -> str:
         if self.axis == "h":
-            return f"bar r{self.lo}-{self.hi} c{self.start}-{self.end} {self.a}>{self.b}"
-        return f"bar c{self.lo}-{self.hi} r{self.start}-{self.end} {self.a}>{self.b}"
+            return f"r{self.lo}{'' if self.lo == self.hi else f'-{self.hi}'} c{self.start}-{self.end}"
+        return f"c{self.lo}{'' if self.lo == self.hi else f'-{self.hi}'} r{self.start}-{self.end}"
 
 
 class HudTracker:
-    """Detects counter/timer bars: every (or every k-th) action flips a few cells of a thin line from
-    colour a to colour b, the flipped cells advancing along the line. Such cells carry no information
-    about what the action did, so they are excluded from change detection and state hashing.
+    """Detects counter/timer bars. A budget/timer bar flips a few cells of a thin line from colour a to
+    colour b on (almost) every action, and successive flips are *contiguous*: the depleted part grows
+    one step at a time. Such cells say nothing about what the action did, so they are excluded from
+    change detection and from state hashes.
 
-    A *tick* = an 8-connected blob of changed cells with one (a -> b) transition, <= ``max_tick`` cells
-    and thickness <= 3. A bar is confirmed by two ticks with the same transition in the same band
-    advancing along it, or immediately by one tick on the outermost frame row/column whose line consists
-    only of the two bar colours. The masked region is the band x the contiguous run of bar-coloured
-    cells through the ticks (sticky: it only grows)."""
+    tick   = an 8-connected blob of changed cells with a single (a -> b) transition, <= ``max_tick`` cells,
+             a filled rectangle of thickness <= 3, isolated (no other change within 2 cells) and not
+             accompanied by the reverse transition on its own line (that is a thin object moving).
+    bar    = confirmed by two ticks from different steps with the same transition on the same line band
+             that touch each other (no gap), or at once by a tick on the outermost frame row/column when
+             that whole line holds only the two bar colours.
+    region = band x the contiguous run of bar-coloured cells through the ticks (sticky, only grows).
+    decay  = a bar that has not ticked for ``decay`` observed changes is dropped (false positives heal)."""
 
-    def __init__(self, max_tick: int = 8, max_gap: int = 8):
+    def __init__(self, max_tick: int = 8, decay: int = 40):
         self.max_tick = max_tick
-        self.max_gap = max_gap
+        self.decay = decay
         self.bars: list[HudBar] = []
-        self.pending: list[tuple[int, int, int, int, int, int]] = []  # (a, b, r0, c0, r1, c1) unconfirmed ticks
+        self.pending: list[tuple[int, tuple]] = []  # (step, blob) unconfirmed ticks
+        self.step = 0
         self._mask = np.zeros((H, W), bool)
 
-    # -- public ------------------------------------------------------------------------------
     def mask(self) -> np.ndarray:
         return self._mask
 
@@ -603,67 +612,64 @@ class HudTracker:
         self.pending = []
 
     def update(self, prev: np.ndarray, cur: np.ndarray) -> list[tuple]:
-        """Feed one settled transition; returns the tick blobs attributed to bars in this step."""
+        """Feed one settled transition (prev -> cur); returns the tick blobs attributed to bars."""
         ch = prev != cur
         if not ch.any():
             return []
-        blobs = self._tick_blobs(prev, cur, ch)
-        used = []
-        new_pending = []
-        for bl in blobs:
+        self.step += 1
+        used, new_pending = [], []
+        for bl in self._tick_blobs(prev, cur, ch):
             a, b, r0, c0, r1, c1 = bl
             bar = self._bar_for(bl)
-            if bar is not None:
-                bar.ticks += 1
-                self._extend(bar, cur, (r0, c0, r1, c1))
-                used.append(bl)
+            if bar is None:
+                partner = self._pending_partner(bl)
+                if partner is not None:
+                    bar = self._make_bar(partner, bl)
+                    self.bars.append(bar)
+                else:
+                    axis = self._edge_axis(bl, cur)
+                    if axis is not None:
+                        lo, hi = (r0, r1) if axis == "h" else (c0, c1)
+                        st, en = (c0, c1) if axis == "h" else (r0, r1)
+                        bar = HudBar(a, b, axis, lo, hi, st, en)
+                        self.bars.append(bar)
+            if bar is None:
+                new_pending.append((self.step, bl))
                 continue
-            partner = self._pending_partner(bl)
-            if partner is not None:
-                self.bars.append(self._make_bar(partner, bl, cur))
-                used.append(bl)
-                continue
-            axis = self._edge_bar(bl, cur)
-            if axis is not None:
-                lo, hi = (r0, r1) if axis == "h" else (c0, c1)
-                st, en = (c0, c1) if axis == "h" else (r0, r1)
-                bar = HudBar(a, b, axis, lo, hi, st, en, 1, True)
-                self._extend(bar, cur, (r0, c0, r1, c1))
-                self.bars.append(bar)
-                used.append(bl)
-                continue
-            new_pending.append(bl)
-        self.pending = (self.pending + new_pending)[-24:]
+            bar.ticks += 1
+            bar.last_step = self.step
+            self._extend(bar, cur, (r0, c0, r1, c1))
+            used.append(bl)
+        self.pending = (self.pending + new_pending)[-32:]
+        self.bars = [br for br in self.bars if self.step - br.last_step <= self.decay]
         self._rebuild()
         return used
 
     def is_tick_only(self, prev: np.ndarray, cur: np.ndarray) -> bool:
-        """True if every changed cell is either masked or a single small unattributed tick-like blob on
-        the outermost frame line (first-step heuristic for no-op detection before confirmation)."""
+        """True if the only unmasked change is one tick-like blob touching the outermost frame line
+        (lets no-op detection work on the first steps, before a bar is confirmed)."""
         ch = (prev != cur) & ~self._mask
         if not ch.any():
             return True
         blobs = self._tick_blobs(prev, cur, ch)
-        tot = sum((r1 - r0 + 1) * (c1 - c0 + 1) for _, _, r0, c0, r1, c1 in blobs)
-        if len(blobs) != 1 or tot != int(ch.sum()):
+        if len(blobs) != 1:
             return False
         _, _, r0, c0, r1, c1 = blobs[0]
-        return r0 in (0, H - 1) or r1 in (0, H - 1) or c0 in (0, W - 1) or c1 in (0, W - 1)
+        if (r1 - r0 + 1) * (c1 - c0 + 1) != int(ch.sum()):
+            return False
+        return r0 == 0 or r1 == H - 1 or c0 == 0 or c1 == W - 1
 
     def describe(self) -> str:
         return "; ".join(b.text() for b in self.bars)
 
     # -- internals ---------------------------------------------------------------------------
     def _tick_blobs(self, prev, cur, ch) -> list[tuple[int, int, int, int, int, int]]:
-        """8-connected blobs of changed cells that look like ticks (small, thin, one transition)."""
         n = int(ch.sum())
-        if n == 0 or n > 400:
+        if n == 0 or n > 600:
             return []
         ys, xs = np.nonzero(ch)
         pts = list(zip(ys.tolist(), xs.tolist()))
-        seen = set()
-        pset = set(pts)
-        out = []
+        pset, seen, out = set(pts), set(), []
         for p in pts:
             if p in seen:
                 continue
@@ -683,29 +689,20 @@ class HudTracker:
             trs = {(int(prev[y, x]), int(cur[y, x])) for y, x in blob}
             if len(trs) != 1:
                 continue
-            r0 = min(y for y, _ in blob)
-            r1 = max(y for y, _ in blob)
-            c0 = min(x for _, x in blob)
-            c1 = max(x for _, x in blob)
+            r0, r1 = min(y for y, _ in blob), max(y for y, _ in blob)
+            c0, c1 = min(x for _, x in blob), max(x for _, x in blob)
             if min(r1 - r0, c1 - c0) + 1 > 3 or (r1 - r0 + 1) * (c1 - c0 + 1) != len(blob):
                 continue
             a, b = trs.pop()
             out.append((a, b, r0, c0, r1, c1))
-        # a timer tick is isolated (no other change within 2 cells) and never comes with the reverse
-        # transition on its own line band in the same step (a moving thin object produces both edges)
         good = []
         for bl in out:
             a, b, r0, c0, r1, c1 = bl
             win = ch[max(0, r0 - 2):r1 + 3, max(0, c0 - 2):c1 + 3]
             if int(win.sum()) != (r1 - r0 + 1) * (c1 - c0 + 1):
                 continue
-            rev = False
-            for o in out:
-                if o is bl or (o[0], o[1]) != (b, a):
-                    continue
-                if (o[2] <= r1 + 1 and o[4] >= r0 - 1) or (o[3] <= c1 + 1 and o[5] >= c0 - 1):
-                    rev = True
-                    break
+            rev = any(o is not bl and (o[0], o[1]) == (b, a) and
+                      ((o[2] <= r1 + 1 and o[4] >= r0 - 1) or (o[3] <= c1 + 1 and o[5] >= c0 - 1)) for o in out)
             if not rev:
                 good.append(bl)
         return good
@@ -713,47 +710,38 @@ class HudTracker:
     def _bar_for(self, bl) -> Optional[HudBar]:
         a, b, r0, c0, r1, c1 = bl
         for bar in self.bars:
-            if {a, b} - {bar.a, bar.b} and not (bar.a == a or bar.b == b):
+            if not ({a, b} <= {bar.a, bar.b} or a == bar.a or b == bar.b):
                 continue
             if bar.axis == "h":
-                if r0 >= bar.lo - 1 and r1 <= bar.hi + 1 and c1 >= bar.start - self.max_gap and c0 <= bar.end + self.max_gap:
+                if r0 >= bar.lo - 1 and r1 <= bar.hi + 1 and c1 >= bar.start - 2 and c0 <= bar.end + 2:
                     return bar
-            else:
-                if c0 >= bar.lo - 1 and c1 <= bar.hi + 1 and r1 >= bar.start - self.max_gap and r0 <= bar.end + self.max_gap:
-                    return bar
+            elif c0 >= bar.lo - 1 and c1 <= bar.hi + 1 and r1 >= bar.start - 2 and r0 <= bar.end + 2:
+                return bar
         return None
 
     def _pending_partner(self, bl):
         a, b, r0, c0, r1, c1 = bl
-        for p in reversed(self.pending):
-            pa, pb, q0, d0, q1, d1 = p
-            if (pa, pb) != (a, b):
+        for item in reversed(self.pending):
+            st, p = item
+            if st == self.step or (p[0], p[1]) != (a, b):
                 continue
-            same_rows = (q0, q1) == (r0, r1)
-            same_cols = (d0, d1) == (c0, c1)
-            if same_rows and not same_cols and min(abs(c0 - d1), abs(d0 - c1)) <= self.max_gap:
+            _, _, q0, d0, q1, d1 = p
+            if (q0, q1) == (r0, r1) and (c0 == d1 + 1 or c1 == d0 - 1):
+                self.pending.remove(item)
                 return p
-            if same_cols and not same_rows and min(abs(r0 - q1), abs(q0 - r1)) <= self.max_gap:
+            if (d0, d1) == (c0, c1) and (r0 == q1 + 1 or r1 == q0 - 1):
+                self.pending.remove(item)
                 return p
         return None
 
-    def _make_bar(self, p, bl, cur) -> HudBar:
+    def _make_bar(self, p, bl) -> HudBar:
         a, b, r0, c0, r1, c1 = bl
         _, _, q0, d0, q1, d1 = p
         if (q0, q1) == (r0, r1):
-            bar = HudBar(a, b, "h", r0, r1, min(c0, d0), max(c1, d1), 2, True)
-        else:
-            bar = HudBar(a, b, "v", c0, c1, min(r0, q0), max(r1, q1), 2, True)
-        self._extend(bar, cur, (r0, c0, r1, c1))
-        try:
-            self.pending.remove(p)
-        except ValueError:
-            pass
-        return bar
+            return HudBar(a, b, "h", r0, r1, min(c0, d0), max(c1, d1), 1)
+        return HudBar(a, b, "v", c0, c1, min(r0, q0), max(r1, q1), 1)
 
-    def _edge_bar(self, bl, cur) -> Optional[str]:
-        """Axis of a bar when one tick sits on the outermost frame row/column whose full line holds only
-        the two bar colours (first-step confirmation), else None."""
+    def _edge_axis(self, bl, cur) -> Optional[str]:
         a, b, r0, c0, r1, c1 = bl
         cols = {a, b}
         if r0 == r1 and r0 in (0, H - 1) and set(np.unique(cur[r0]).tolist()) <= cols:
@@ -763,15 +751,12 @@ class HudTracker:
         return None
 
     def _extend(self, bar: HudBar, cur: np.ndarray, tick) -> None:
-        """Grow the along-axis extent over contiguous cells whose band is entirely bar-coloured."""
         cols = np.array(sorted({bar.a, bar.b}))
         if bar.axis == "h":
-            band = cur[bar.lo:bar.hi + 1, :]
-            ok = np.isin(band, cols).all(axis=0)
+            ok = np.isin(cur[bar.lo:bar.hi + 1, :], cols).all(axis=0)
             lo, hi = min(bar.start, tick[1]), max(bar.end, tick[3])
         else:
-            band = cur[:, bar.lo:bar.hi + 1]
-            ok = np.isin(band, cols).all(axis=1)
+            ok = np.isin(cur[:, bar.lo:bar.hi + 1], cols).all(axis=1)
             lo, hi = min(bar.start, tick[0]), max(bar.end, tick[2])
         while lo - 1 >= 0 and ok[lo - 1]:
             lo -= 1
@@ -787,13 +772,14 @@ class HudTracker:
 
 
 def masked_hash(frame: Any, mask: Optional[np.ndarray] = None, level: Any = None) -> str:
-    """Deterministic hash of a frame with HUD cells blanked (and an optional level tag)."""
+    """Deterministic 16-hex hash of a frame with HUD cells blanked (and an optional level tag)."""
     g = to_grid(frame).astype(np.int8)
     if mask is not None and mask.any():
         g = g.copy()
         g[mask] = -1
+    b = g.tobytes()
     pre = b"" if level is None else str(level).encode() + b"|"
-    return f"{zlib.crc32(pre + g.tobytes()) & 0xffffffff:08x}{zlib.adler32(g.tobytes()) & 0xffffffff:08x}"
+    return f"{zlib.crc32(pre + b) & 0xffffffff:08x}{zlib.adler32(pre + b) & 0xffffffff:08x}"
 
 
 # ------------------------------------------------------------------------------------------------
@@ -802,32 +788,33 @@ def masked_hash(frame: Any, mask: Optional[np.ndarray] = None, level: Any = None
 class AvatarTracker:
     """Learns which object(s) move consistently with the non-click actions.
 
-    Evidence is keyed by the moved component's colour (shape can change when an avatar turns). For each
-    (colour, action) we count displacement directions; a colour is controlled when it moved under >= 2
-    steps and, per action, its dominant direction explains >= 75% of its moves. Mass scrolls (most moved
-    cells share one displacement and cover > 25% of the frame) are ignored."""
+    Evidence is keyed by the moved component's colour (an avatar's shape may change when it turns).
+    Per (colour, action) the displacement directions are counted; a colour is *controlled* when it moved
+    in >= 2 steps and its dominant direction per action explains >= 75% of its moves. Ignored: mass
+    scrolls (one displacement covering most moved cells of a large change) and tile-swap artefacts
+    (a moved component whose type has >= 4 identical copies in the frame, e.g. the floor cell an
+    avatar vacated)."""
 
     def __init__(self):
         self.ev: dict[int, dict[int, Counter]] = defaultdict(lambda: defaultdict(Counter))
-        self.step_mag: dict[int, Counter] = defaultdict(Counter)
+        self.mag: dict[int, Counter] = defaultdict(Counter)
         self.last_pos: dict[int, Comp] = {}
-        self.steps_seen: Counter = Counter()
 
-    def update(self, aid: int, events: list[ObjEvent], changed_n: int) -> None:
+    def update(self, aid: int, events: list[ObjEvent], changed_n: int, type_count: Optional[Counter] = None) -> None:
         if aid in (0, 6, 7) or aid < 0:
             return
-        self.steps_seen[aid] += 1
         moved = [e for e in events if e.kind == "moved"]
+        if type_count is not None:
+            moved = [e for e in moved if type_count.get(e.after.ctype, 0) < 4]
         if not moved:
             return
         tot = sum(e.before.n for e in moved)
-        if changed_n > 0.25 * H * W:
+        if changed_n > 0.25 * H * W and len(moved) > 3:
             disp = Counter()
             for e in moved:
                 disp[(e.dx, e.dy)] += e.before.n
-            if disp.most_common(1)[0][1] > 0.6 * tot and len(moved) > 3:
+            if disp.most_common(1)[0][1] > 0.6 * tot:
                 return  # camera scroll
-        # one vote per colour per step (largest moved component of that colour)
         best: dict[int, ObjEvent] = {}
         for e in moved:
             if e.color not in best or e.before.n > best[e.color].before.n:
@@ -835,7 +822,7 @@ class AvatarTracker:
         for colr, e in best.items():
             d = (int(np.sign(e.dx)), int(np.sign(e.dy)))
             self.ev[colr][aid][d] += 1
-            self.step_mag[colr][max(abs(e.dx), abs(e.dy))] += 1
+            self.mag[colr][max(abs(e.dx), abs(e.dy))] += 1
             self.last_pos[colr] = e.after
 
     def ranking(self) -> list[tuple[float, int]]:
@@ -848,37 +835,62 @@ class AvatarTracker:
             if cons < 0.75 * moves:
                 continue
             dirs = {c.most_common(1)[0][0] for c in per.values()}
-            score = cons + 0.5 * len(dirs) - 0.5 * (moves - cons)
-            out.append((score, colr))
+            out.append((cons + 0.5 * len(dirs) - 0.5 * (moves - cons), colr))
         out.sort(key=lambda t: (-t[0], t[1]))
         return out
 
-    def avatars(self, max_n: int = 2) -> list[int]:
+    def avatars(self, max_n: int = 3) -> list[int]:
         r = self.ranking()
         if not r:
             return []
         top = r[0][0]
-        return [c for s, c in r[:max_n] if s >= 0.6 * top]
+        return [c for sc, c in r[:max_n] if sc >= 0.6 * top]
 
     def controls(self, colr: int) -> dict[int, str]:
-        """action id -> direction name for a controlled colour."""
         out = {}
         for aid, c in sorted(self.ev.get(colr, {}).items()):
             d = c.most_common(1)[0][0]
             out[aid] = DIR_NAMES.get(d, f"({d[0]:+d},{d[1]:+d})")
         return out
 
+    def step_size(self, colr: int) -> int:
+        m = self.mag.get(colr)
+        return m.most_common(1)[0][0] if m else 0
+
     def locate(self, seg: Segmentation, colr: int) -> Optional[Comp]:
         """Current component of an avatar colour: same shape as last seen, else nearest same colour."""
-        last = self.last_pos.get(colr)
         cands = [c for c in seg.comps if c.color == colr and not c.bg]
         if not cands:
             return None
+        last = self.last_pos.get(colr)
         if last is not None:
-            same = [c for c in cands if c.shape == last.shape]
-            pool = same or cands
+            pool = [c for c in cands if c.shape == last.shape] or cands
             return min(pool, key=lambda c: (abs(c.cy - last.cy) + abs(c.cx - last.cx), c.id))
         return max(cands, key=lambda c: (c.n, -c.id))
+
+    def groups(self, seg: Segmentation) -> list[tuple[list[int], tuple[int, int, int, int]]]:
+        """Avatar colours located in ``seg`` and merged when their boxes touch (multi-colour sprites):
+        [(colours, (r0, c0, r1, c1)), ...]."""
+        items = []
+        for colr in self.avatars():
+            c = self.locate(seg, colr)
+            if c is not None:
+                items.append(([colr], list(c.bbox)))
+        merged = True
+        while merged:
+            merged = False
+            for i in range(len(items)):
+                for j in range(i + 1, len(items)):
+                    a, b = items[i][1], items[j][1]
+                    if a[0] <= b[2] + 1 and b[0] <= a[2] + 1 and a[1] <= b[3] + 1 and b[1] <= a[3] + 1:
+                        items[i] = (items[i][0] + items[j][0],
+                                    [min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3])])
+                        items.pop(j)
+                        merged = True
+                        break
+                if merged:
+                    break
+        return [(cols, tuple(bb)) for cols, bb in items]
 
 
 # ------------------------------------------------------------------------------------------------
@@ -893,7 +905,7 @@ class ClickCandidate:
     count: int  # instances of this type in the frame
     score: float
     status: str  # live | dead | untested
-    rank_type: int = 0  # rank of this object's type among types
+    rank_type: int = 0
 
     def short(self) -> str:
         c = self.comp
@@ -903,8 +915,8 @@ class ClickCandidate:
 
 
 def click_point(c: Comp, seg: Segmentation) -> tuple[int, int]:
-    """A display (x, y) inside component c: the member cell nearest its centroid, snapped to the
-    centre of its s x s grid block when that block lies in the component."""
+    """Display (x, y) inside component c: the member cell nearest its centroid, snapped to the centre
+    of its s x s grid block when that block centre is also in the component."""
     s, oy, ox = seg.scale
     m = seg.labels[c.r0:c.r1 + 1, c.c0:c.c1 + 1] == c.id
     ys, xs = np.nonzero(m)
@@ -914,9 +926,8 @@ def click_point(c: Comp, seg: Segmentation) -> tuple[int, int]:
     i = int(np.lexsort((xs, ys, d))[0])
     y, x = int(ys[i]), int(xs[i])
     if s > 1:
-        by = oy + ((y - oy) // s) * s
-        bx = ox + ((x - ox) // s) * s
-        cy, cx = by + s // 2, bx + s // 2
+        cy = oy + ((y - oy) // s) * s + s // 2
+        cx = ox + ((x - ox) // s) * s + s // 2
         if 0 <= cy < H and 0 <= cx < W and seg.labels[cy, cx] == c.id:
             y, x = cy, cx
     return x, y
@@ -925,19 +936,19 @@ def click_point(c: Comp, seg: Segmentation) -> tuple[int, int]:
 def rank_click_candidates(seg: Segmentation, hud_mask: Optional[np.ndarray] = None,
                           dead: Optional[Counter] = None, live: Optional[Counter] = None,
                           max_n: int = 64, include_bg: bool = True) -> list[ClickCandidate]:
-    """One candidate per (non-background) object, deduplicated per grid cell, ranked by
-    rarity / size / shape; object types whose clicks changed nothing (``dead`` without ``live``) sink to
-    the bottom. The list is type-diverse: the best instance of every type first, then the duplicates."""
+    """One ACTION6 candidate per non-background object (deduplicated per grid cell), ranked by colour
+    rarity, size in grid cells, type multiplicity and compactness. Object types whose clicks changed
+    nothing (``dead`` and never ``live``) sink below every other type; types that worked before rise.
+    Order is type-diverse: the best instance of every type first, then the remaining instances, then
+    dead types; one background (empty-space) candidate closes the list."""
     dead = dead or Counter()
     live = live or Counter()
     s, oy, ox = seg.scale
     objs = [c for c in seg.comps if not c.bg]
     if hud_mask is not None and hud_mask.any():
-        objs = [c for c in objs if not hud_mask[int(round(c.cy)), int(round(c.cx))] or c.n > 64]
-    if not objs and not include_bg:
-        return []
+        objs = [c for c in objs if not hud_mask[min(H - 1, int(round(c.cy))), min(W - 1, int(round(c.cx)))]]
     fg_total = sum(c.n for c in objs) or 1
-    color_px = Counter()
+    color_px: Counter = Counter()
     for c in objs:
         color_px[c.color] += c.n
     type_count = Counter(c.ctype for c in objs)
@@ -958,14 +969,8 @@ def rank_click_candidates(seg: Segmentation, hud_mask: Optional[np.ndarray] = No
         else:
             sc -= 1.0
         m = type_count[c.ctype]
-        if m == 1:
-            sc += 0.5
-        elif m <= 12:
-            sc += 0.3
-        else:
-            sc -= 1.5
-        fill = c.n / float(c.w * c.h)
-        if fill >= 0.6:
+        sc += 0.5 if m == 1 else (0.3 if m <= 12 else -1.5)
+        if c.n / float(c.w * c.h) >= 0.6:
             sc += 0.3
         if c.color == seg.bg_color:  # holes / gaps in the background colour are rarely targets
             sc -= 1.5
@@ -981,27 +986,23 @@ def rank_click_candidates(seg: Segmentation, hud_mask: Optional[np.ndarray] = No
             status = "untested"
         scored.append((sc, c, status))
     scored.sort(key=lambda t: (-t[0], t[1].r0, t[1].c0))
-    out: list[ClickCandidate] = []
     seen_cells: set = set()
     type_rank: dict[str, int] = {}
     firsts, dups = [], []
     for sc, c, status in scored:
         x, y = click_point(c, seg)
-        cellkey = ((y - oy) // s, (x - ox) // s) if s > 1 else (y, x)
+        cellkey = ((y - oy) // s, (x - ox) // s)
         if cellkey in seen_cells:
             continue
         seen_cells.add(cellkey)
+        cand = ClickCandidate(x, y, c, c.ctype, type_count[c.ctype], round(sc, 3), status)
         if c.ctype not in type_rank:
             type_rank[c.ctype] = len(type_rank)
-            firsts.append(ClickCandidate(x, y, c, c.ctype, type_count[c.ctype], round(sc, 3), status))
+            firsts.append(cand)
         else:
-            dups.append(ClickCandidate(x, y, c, c.ctype, type_count[c.ctype], round(sc, 3), status))
-    # live/untested duplicates before dead representatives
-    good_firsts = [k for k in firsts if k.status != "dead"]
-    dead_firsts = [k for k in firsts if k.status == "dead"]
-    good_dups = [k for k in dups if k.status != "dead"]
-    dead_dups = [k for k in dups if k.status == "dead"]
-    ordered = good_firsts + good_dups + dead_firsts + dead_dups
+            dups.append(cand)
+    ordered = ([k for k in firsts if k.status != "dead"] + [k for k in dups if k.status != "dead"] +
+               [k for k in firsts if k.status == "dead"] + [k for k in dups if k.status == "dead"])
     for k in ordered:
         k.rank_type = type_rank[k.ctype]
     if include_bg:
@@ -1009,25 +1010,26 @@ def rank_click_candidates(seg: Segmentation, hud_mask: Optional[np.ndarray] = No
         if bgc:
             c = max(bgc, key=lambda q: (q.n, -q.id))
             x, y = click_point(c, seg)
-            st = "live" if live[f"bg:{c.color}"] else ("dead" if dead[f"bg:{c.color}"] else "untested")
-            ordered.append(ClickCandidate(x, y, c, f"bg:{c.color}", 1, -9.0, st, len(type_rank)))
+            key = f"bg:{c.color}"
+            st = "live" if live[key] else ("dead" if dead[key] else "untested")
+            ordered.append(ClickCandidate(x, y, c, key, 1, -9.0, st, len(type_rank)))
     return ordered[:max_n]
 
 
-def candidates_text(cands: list[ClickCandidate], k: int = 8, max_pos: int = 4) -> str:
-    """Group candidates by type: ``c11 3x3 x8 @(36,36)(44,36)..; c14 8x8 @(4,29)``."""
+def candidates_text(cands: list[ClickCandidate], k: int = 6, max_pos: int = 3) -> str:
+    """Candidates grouped by type, best first: ``c11 3x3 x8 @(36,36)(44,36)(52,36)..; c14 8x8 @(4,29)``.
+    ``+`` = clicks on this type changed something before, ``-`` = they did nothing."""
     groups: dict[str, list[ClickCandidate]] = {}
     for cd in cands:
-        if cd.ctype.startswith("bg:"):
-            continue
-        groups.setdefault(cd.ctype, []).append(cd)
+        if not cd.ctype.startswith("bg:"):
+            groups.setdefault(cd.ctype, []).append(cd)
     parts = []
     for ct, lst in list(groups.items())[:k]:
         c = lst[0].comp
         st = {"live": "+", "dead": "-", "untested": ""}[lst[0].status]
-        pos = "".join(f"({q.x},{q.y})" for q in lst[:max_pos]) + ("…" if len(lst) > max_pos else "")
-        mult = f"x{lst[0].count} " if lst[0].count > 1 else ""
-        parts.append(f"c{c.color} {c.w}x{c.h}{st} {mult}@{pos}")
+        pos = "".join(f"({q.x},{q.y})" for q in lst[:max_pos]) + (".." if len(lst) > max_pos else "")
+        mult = f" x{lst[0].count}" if lst[0].count > 1 else ""
+        parts.append(f"c{c.color} {c.w}x{c.h}{st}{mult} @{pos}")
     return "; ".join(parts)
 
 
@@ -1035,8 +1037,8 @@ def candidates_text(cands: list[ClickCandidate], k: int = 8, max_pos: int = 4) -
 # animation summary
 # ------------------------------------------------------------------------------------------------
 def animation_summary(prev: Any, frames: Sequence[Any], mask: Optional[np.ndarray] = None) -> dict:
-    """n_frames, the bbox of cells touched during the animation, the transient cells (changed at some
-    point but back to their pre-step value at the end) and the frame with the largest deviation."""
+    """n_frames; bbox of every cell touched during the step; transient cells (changed at some point
+    but back to their pre-step value at the end) and their bbox; the frame deviating most from prev."""
     fr = to_frames(frames)
     out = {"n_frames": len(fr), "touched_bbox": None, "transient_bbox": None, "transient_n": 0, "peak_frame": None}
     if len(fr) <= 1 or prev is None:
@@ -1063,6 +1065,21 @@ def animation_summary(prev: Any, frames: Sequence[Any], mask: Optional[np.ndarra
 
 
 # ------------------------------------------------------------------------------------------------
+# token estimate (Qwen/GLM-style tokenizers split digits individually)
+# ------------------------------------------------------------------------------------------------
+_TOK_RE = None
+
+
+def approx_tokens(s: str) -> int:
+    """Conservative token estimate: every digit, every letter run and every punctuation mark = 1."""
+    global _TOK_RE
+    if _TOK_RE is None:
+        import re
+        _TOK_RE = re.compile(r"\d|[A-Za-z]+|[^\sA-Za-z\d]")
+    return len(_TOK_RE.findall(s))
+
+
+# ------------------------------------------------------------------------------------------------
 # stateful facade
 # ------------------------------------------------------------------------------------------------
 @dataclass
@@ -1077,21 +1094,22 @@ class Percept:
     clicked: Optional[Comp] = None
     avatar_moves: list[ObjEvent] = field(default_factory=list)
     text: str = ""
+    hash_before: str = ""
+    hash_after: str = ""
 
 
 class Perceiver:
     """Per-game perception state: HUD bars, avatar evidence, dead/live click types, grid scale.
 
-    Typical use::
-
-        P = Perceiver()
-        P.reset(frame0)                                   # at game start
+        P = Perceiver(); P.reset(first_frame, level=0)
         pc = P.observe(prev_frame, obs.frames, action, level=obs.levels_completed, state=obs.state)
-        prompt += pc.text                                 # compact <=150-token description
-        cands = P.candidates(obs.frame)                   # ranked ACTION6 targets
+        pc.text                      # <= ~150-token description of what the action did
+        P.summary(obs.frame)         # scale / HUD / avatar+controls / ranked click candidates
+        P.candidates(obs.frame)      # ranked ACTION6 targets
     """
 
-    def __init__(self):
+    def __init__(self, token_budget: int = 150):
+        self.token_budget = token_budget
         self.hud = HudTracker()
         self.avatar = AvatarTracker()
         self.dead: Counter = Counter()
@@ -1100,7 +1118,7 @@ class Perceiver:
         self._edges_h = np.zeros(W, np.int64)
         self._edges_v = np.zeros(H, np.int64)
         self._scale = (1, 0, 0)
-        self._seg_cache: tuple[Optional[bytes], Optional[Segmentation]] = (None, None)
+        self._seg_cache: dict[bytes, Segmentation] = {}
         self.level_start: Optional[np.ndarray] = None
         self.n_steps = 0
 
@@ -1116,11 +1134,13 @@ class Perceiver:
 
     def seg(self, frame: Any) -> Segmentation:
         g = to_grid(frame)
-        key = g.astype(np.int8).tobytes() + self.hud.mask().tobytes()
-        if self._seg_cache[0] == key:
-            return self._seg_cache[1]
-        s = segment(g, hud_mask=self.hud.mask(), scale=self._scale)
-        self._seg_cache = (key, s)
+        key = g.astype(np.int8).tobytes() + self.hud.mask().tobytes() + bytes(self._scale)
+        s = self._seg_cache.get(key)
+        if s is None:
+            s = segment(g, hud_mask=self.hud.mask(), scale=self._scale)
+            if len(self._seg_cache) >= 4:
+                self._seg_cache.pop(next(iter(self._seg_cache)))
+            self._seg_cache[key] = s
         return s
 
     def hud_mask(self) -> np.ndarray:
@@ -1139,20 +1159,22 @@ class Perceiver:
         self._add_edges(g)
 
     def observe(self, prev: Any, frames: Any, action: Any, level: Any = None, state: Optional[str] = None) -> Percept:
+        """Digest one env step (prev settled frame, all frames returned by the step, the action)."""
         fr = to_frames(frames)
         aid, x, y = norm_action(action)
         if not fr:
             d = Delta(np.zeros((H, W), bool), 0, None, Counter())
             pc = Percept((aid, x, y), d, [], {"n_frames": 0}, True, False, state)
-            pc.text = f"{action_label(action)}: ignored (no frame; state {state})"
+            pc.text = f"{action_label(action)}: ignored, no frame (state {state})"
             return pc
         cur = fr[-1]
         p = to_grid(prev) if prev is not None else cur
+        if self.level_start is None:
+            self.reset(p, level if level is not None else 0)
         level_changed = level is not None and self.level is not None and level != self.level
-        seg_prev = self.seg(p)
-        clicked = seg_prev.comp_at(x, y) if aid == 6 and x is not None else None
+        clicked = self.seg(p).comp_at(x, y) if aid == 6 and x is not None else None
+        h_before = self.state_hash(p)
         if level_changed or aid == 0:
-            # new level / reset: no causal diff; restart per-level geometry
             self.hud.reset_pending()
             if level is not None:
                 self.level = level
@@ -1161,8 +1183,8 @@ class Perceiver:
             self._edges_v[:] = 0
             self._add_edges(cur)
             d = frame_delta(p, cur, self.hud.mask())
-            pc = Percept((aid, x, y), d, [], animation_summary(p, fr, self.hud.mask()), False, level_changed, state,
-                         clicked)
+            pc = Percept((aid, x, y), d, [], animation_summary(p, fr, self.hud.mask()), False, level_changed,
+                         state, clicked, hash_before=h_before, hash_after=self.state_hash(cur))
             pc.text = self._text(pc, p, cur)
             self.n_steps += 1
             return pc
@@ -1171,22 +1193,24 @@ class Perceiver:
         self.hud.update(p, cur)
         mask = self.hud.mask()
         d = frame_delta(p, cur, mask)
-        noop = d.n == 0 or (self.n_steps < 3 and self.hud.is_tick_only(p, cur))
+        noop = d.n == 0 or (self.n_steps < 4 and self.hud.is_tick_only(p, cur))
         events: list[ObjEvent] = []
-        if d.n:
-            events = object_diff(self.seg(p), self.seg(cur), d.changed)
+        if d.n and not noop:
+            seg_cur = self.seg(cur)
+            events = object_diff(self.seg(p), seg_cur, d.changed)
+            tc = Counter(c.ctype for c in seg_cur.comps if not c.bg)
+            self.avatar.update(aid, events, d.n, tc)
         self._add_edges(cur)
-        self.avatar.update(aid, events, d.n)
         if aid == 6:
-            key = clicked.ctype if clicked is not None and not clicked.bg else (
-                f"bg:{clicked.color}" if clicked is not None else "offscreen")
+            key = (clicked.ctype if not clicked.bg else f"bg:{clicked.color}") if clicked is not None else "offscreen"
             if noop and len(fr) <= 1:
                 self.dead[key] += 1
             elif not noop:
                 self.live[key] += 1
         av = set(self.avatar.avatars())
         pc = Percept((aid, x, y), d, events, animation_summary(p, fr, mask), noop, False, state, clicked,
-                     [e for e in events if e.kind == "moved" and e.color in av])
+                     [e for e in events if e.kind == "moved" and e.color in av],
+                     hash_before=h_before, hash_after=self.state_hash(cur))
         pc.text = self._text(pc, p, cur)
         self.n_steps += 1
         return pc
@@ -1195,57 +1219,88 @@ class Perceiver:
     def candidates(self, frame: Any, max_n: int = 64) -> list[ClickCandidate]:
         return rank_click_candidates(self.seg(frame), self.hud.mask(), self.dead, self.live, max_n)
 
-    def avatar_text(self, frame: Any) -> str:
-        cols = self.avatar.avatars()
-        if not cols:
+    def avatar_text(self, frame: Any, controls: bool = True) -> str:
+        groups = self.avatar.groups(self.seg(frame))
+        if not groups:
             return ""
-        seg = self.seg(frame)
         parts = []
-        for colr in cols:
-            c = self.avatar.locate(seg, colr)
-            ctl = " ".join(f"A{a}={dn}" for a, dn in self.avatar.controls(colr).items())
-            where = f" @(x{c.c0},y{c.r0}) {c.w}x{c.h}" if c is not None else ""
-            parts.append(f"c{colr}{where} [{ctl}]")
+        for cols, (r0, c0, r1, c1) in groups:
+            s = f"{'+'.join(f'c{c}' for c in cols)} (x{c0},y{r0}) {c1 - c0 + 1}x{r1 - r0 + 1}"
+            if controls:
+                ctl = self.avatar.controls(cols[0])
+                step = self.avatar.step_size(cols[0])
+                s += " [" + " ".join(f"A{a}={dn}" for a, dn in ctl.items()) + (f" step {step}" if step else "") + "]"
+            parts.append(s)
         return "avatar " + "; ".join(parts)
 
-    def _text(self, pc: Percept, prev: np.ndarray, cur: np.ndarray, max_chars: int = 560) -> str:
+    def summary(self, frame: Any, k: int = 6) -> str:
+        """State block for the prompt: grid scale, background, HUD bars, avatar + learned controls,
+        ranked click candidates (only when clicks can matter is up to the caller)."""
+        seg = self.seg(frame)
+        s, oy, ox = self._scale
+        out = [f"grid cell {s}px" + (f" offset(x{ox},y{oy})" if (ox or oy) else "") + f", bg c{seg.bg_color}"]
+        if self.hud.bars:
+            out.append("timer/HUD (ignored in diffs): " + "; ".join(b.text() for b in self.hud.bars))
+        at = self.avatar_text(frame)
+        if at:
+            out.append(at)
+        ct = candidates_text(self.candidates(frame), k=k)
+        if ct:
+            out.append("click targets: " + ct)
+        return "\n".join(out)
+
+    def _text(self, pc: Percept, prev: np.ndarray, cur: np.ndarray) -> str:
         head = action_label(pc.action)
         if pc.action[0] == 6 and pc.clicked is not None:
             c = pc.clicked
-            head += f" on {'bg ' if c.bg else ''}{c.short()}"
+            head += " on " + ("empty" if c.bg else c.short())
         bits = []
         if pc.state in ("GAME_OVER", "WIN"):
             bits.append(pc.state)
         if pc.level_changed:
-            bits.append(f"NEW LEVEL {pc.level_changed and self.level}")
+            bits.append(f"LEVEL COMPLETE -> level {self.level}")
         if pc.anim.get("n_frames", 1) > 1:
             a = pc.anim
             t = f"anim {a['n_frames']}f"
             if a.get("transient_bbox"):
-                t += f" transient {_fmt_bbox(a['transient_bbox'])} ({a['transient_n']})"
+                t += f" (transient {_fmt_bbox(a['transient_bbox'])})"
             bits.append(t)
         if pc.level_changed or pc.action[0] == 0:
-            return f"{head}: " + ", ".join(bits + [f"{pc.delta.n} cells differ"])
+            return f"{head}: " + ", ".join(bits + ["new board" if pc.delta.n > 200 else f"{pc.delta.n} cells differ"])
         if pc.noop:
-            bits.append("no effect" + (" (timer only)" if pc.delta.hud_changed or pc.delta.n else ""))
+            bits.append("no effect" + (" (timer tick only)" if pc.delta.hud_changed or pc.delta.n else ""))
             if pc.action[0] == 6 and pc.clicked is not None and not pc.clicked.bg:
-                bits.append("type demoted")
+                bits.append("type marked dead")
             return f"{head}: " + ", ".join(bits)
-        bits.append(f"{pc.delta.n} cells {_fmt_bbox(pc.delta.bbox)}")
+        bits.append(f"{pc.delta.n} cells changed in {_fmt_bbox(pc.delta.bbox)}")
         text = f"{head}: " + ", ".join(bits)
-        ev = [e.text() for e in pc.events[:4]]
-        if len(pc.events) > 4:
-            ev.append(f"+{len(pc.events) - 4} more")
-        if ev:
-            text += ". " + "; ".join(ev)
+        budget = self.token_budget
+        # raw cells first when tiny (exact), else object events, then the avatar line
+        if pc.delta.n <= 6:
+            dt = delta_text(prev, cur, self.hud.mask(), max_cells=6, delta=pc.delta)
+            cand = text + ". " + dt
+            if approx_tokens(cand) <= budget:
+                text = cand
+        shown = 0
+        for e in pc.events:
+            cand = text + ("; " if shown else ". ") + e.text()
+            if approx_tokens(cand) > budget - 12:
+                break
+            text = cand
+            shown += 1
+        if shown < len(pc.events):
+            cand = text + f"; +{len(pc.events) - shown} more"
+            if approx_tokens(cand) <= budget:
+                text = cand
         if pc.avatar_moves:
-            text += ". " + self.avatar_text(cur)
-        rest = max_chars - len(text) - 2
-        if rest > 40:
-            dt = delta_text(prev, cur, self.hud.mask(), max_cells=10, max_chars=min(rest, 220), delta=pc.delta)
-            if len(dt) <= rest:
-                text += ". " + dt
-        return text[:max_chars]
+            cand = text + ". " + self.avatar_text(cur, controls=False)
+            if approx_tokens(cand) <= budget:
+                text = cand
+        if 6 < pc.delta.n <= 40:
+            cand = text + ". " + delta_text(prev, cur, self.hud.mask(), max_cells=0, max_chars=400, delta=pc.delta)
+            if approx_tokens(cand) <= budget:
+                text = cand
+        return text
 
     def describe(self, prev: Any, cur: Any, action: Any, level: Any = None, state: Optional[str] = None) -> str:
         return self.observe(prev, cur, action, level=level, state=state).text

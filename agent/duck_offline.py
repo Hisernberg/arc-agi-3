@@ -355,7 +355,6 @@ RANDOM_WEIGHTS: dict[str, int] = {
 }
 _NON_ACTING = {"inspect", "text_only", "invalid_action", "mouse_no_coords", "syntax_error", "bad_json",
                "unknown_tool", "advertised_unmappable"}
-_TOOL_CALL_SCENARIOS = set(_ACT_TEMPLATES) | {"content_and_tool", "syntax_error", "bad_json", "unknown_tool"}
 
 _FILLER = (
     "Looking at the segmentation, I compare previous_frame with current_frame to see which objects moved, "
