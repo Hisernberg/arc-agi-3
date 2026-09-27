@@ -6,13 +6,13 @@ Machine-readable index: `SCRATCH/kaggle/notebooks/index.json` (and `index.csv` f
 ## TL;DR
 
 1. **No public notebook is close to the top of the leaderboard.** The best public notebook scores **5.19**. Only **7 of the 456 scored notebooks reach 4 or more**, and every one of them runs the same stack: the Tufa Labs **Duck harness** with Keith Tyser's **Qwen3.8-Flash-Next-NVFP4 + MTP-3 vLLM** serving.
-   - None of the top-10 teams (27.3 to 9.96) has published a current notebook. I checked every member of the top-80 teams.
+   - None of the top-10 teams (27.3 to 9.96) has published a current notebook. I matched all 1,132 competition notebooks against the members of the top-150 teams, and listed every kernel of each top-16 team member.
    - Their only public ARC-AGI-3 code is from the June milestone and scored between 0.1 and 1.3 (§7).
 2. **The public top-10 is mostly noise around one codebase.**
    - The byte-identical keithtyser base was submitted independently **12 times**: mean **3.29**, sd **0.51**, range **2.38–4.33**.
    - The #3 notebook (4.33, "Duck Qwen3.8 Anim Base") is that exact code. It is also the best of 13 daily resubmissions.
    - #2 (4.50) differs from the base only by `analyzer_timeout = 1200`. The same code also scored 4.08 and 2.81.
-   - #5 (4.09) and #7 (4.08) only add dead or diagnostic code, or turn prefix caching on.
+   - #5 (4.09) adds only dead code, #6 (4.08) only turns prefix caching on, and #7 (4.08) is a copy of #2.
 3. **The one variant that seems genuinely better is the #1 notebook, `scottlegrand/taaf-flashnext-sheetu12b-0922` (5.19).** Its 5.19 is about 3.7 sd above the base mean.
    - It is **code-identical to the user's current notebook** (`SCRATCH/nb/user_nb_code.py`; only the outputs differ).
    - It layers runtime patches on the stock bundle:
@@ -20,7 +20,7 @@ Machine-readable index: `SCRATCH/kaggle/notebooks/index.json` (and `index.csv` f
      - **animation frames exposed in the Python sandbox (F13)**;
      - **an all-frames contact-sheet image (F19)**;
      - the **board image upscaled 4→12** (768 px);
-     - 16 vLLM sequences with a 16k analyzer context.
+     - 16 vLLM sequences with a 16k analyzer context. **The 16k setting never takes effect**: `serving_setup.py` re-persists 32768, and the measured prompts have a median of 21k tokens (§5.3).
    - Its own comments claim that **F13 is "the only change that has ever moved the hidden leaderboard (3.20 → 3.71)"**, and that a *text* narration of the same frames **dropped it to 2.57** ("frames yes, narration no").
 4. **The model and serving choice decide most of the score. Prompt and harness tweaks are all inside the noise.** Median scores by family:
 
@@ -35,8 +35,14 @@ Machine-readable index: `SCRATCH/kaggle/notebooks/index.json` (and `index.csv` f
 5. **A local public-25 score does not predict the hidden leaderboard.** Across 40 notebooks with a full 25-game commit run, the correlation between local mean and public LB is **r = 0.11**. The base code alone ranges 5.8–8.7 locally.
    - **Time allocation matters.** The hidden run has about **110 games** (55 public-LB and 55 private, all played in one 9-hour run). Duck plays 28 concurrently with 7,920 s per game, so 4 waves need about 31.7k s but only about 28k s is available. The last wave is cut roughly in half.
    - One fork set `max_runtime_s_per_game = 27000`. It scored **13.3 locally but only 2.58 on the LB**, because it starved about 80 hidden games.
-6. **Techniques worth keeping** (details in §9):
-   - the Flash-Next NVFP4 + MTP serving stack;
+6. **The GPU is badly under-used by every public Flash-Next notebook, including the user's** (§5.3).
+   - Across 24 commit runs, **about 87 % of each LLM request's latency is spent queued inside vLLM**.
+   - The reason: MTP3 weights take 81.8 GiB, and the 5 GiB KV pool holds only **105k tokens**, which is about 5 concurrent 21k-token prompts for 28 games.
+   - Turning **MTP off** frees about 7.5 GiB of weights, and the same 5 GiB then holds 188k tokens.
+   - Thuitanium's serving benchmark measured **MTP0 + KV 7 GiB + 28 seqs = 722 tok/s against 359 tok/s** for the stock profile, a 2× gain. A full MTP0 / KV7 / s20 run made 33 % more requests.
+   - This is the single most concrete lever found. More actions do not by themselves raise the score (levels do: r = 0.88), but on the time-starved 110-game hidden run, throughput is time.
+7. **Techniques worth keeping** (details in §9):
+   - the Flash-Next NVFP4 serving stack (**re-tuned: MTP0, bigger KV, more seqs, prefix caching**);
    - animation-frame access (F13 and F19);
    - a larger board image;
    - HUD / no-op awareness;
@@ -86,7 +92,7 @@ Nearly every notebook scoring ≥ 2 is a Duck fork. The model progression Qwen3.
 
 | # | Notebook (scored version) | Author | Public | Date | Approach / diff vs base | Model / serving | Local 25 |
 |---|---|---|---|---|---|---|---|
-| 1 | [scottlegrand/taaf-flashnext-sheetu12b-0922](https://www.kaggle.com/code/scottlegrand/taaf-flashnext-sheetu12b-0922) v1 | Scott Le Grand | **5.19** | 09-22 | Duck + **AGENTFIX** runtime patches: F1 image-history trim, F3 tolerant memory with no wipe on game over, F9 timing, **F13 anim frames in sandbox**, **F19 frame contact-sheet image**. **ARM P board image ×12**. c16 / ctx16k. **= user's current notebook.** | Flash-Next NVFP4, MTP3, KV 5 GiB, `max_num_seqs=16`, analyzer ctx 16384 | 10.02 (2 h cap) |
+| 1 | [scottlegrand/taaf-flashnext-sheetu12b-0922](https://www.kaggle.com/code/scottlegrand/taaf-flashnext-sheetu12b-0922) v1 | Scott Le Grand | **5.19** | 09-22 | Duck + **AGENTFIX** runtime patches: F1 image-history trim, F3 tolerant memory with no wipe on game over, F9 timing, **F13 anim frames in sandbox**, **F19 frame contact-sheet image**. **ARM P board image ×12**. c16 / ctx16k. **= user's current notebook.** | Flash-Next NVFP4, MTP3, KV 5 GiB, `max_num_seqs=16`, analyzer ctx 16384 requested (**32768 effective**, see §5.3) | 10.02 (2 h cap) |
 | 2 | [chiakazirim/duck-qwen3-8-tuned](https://www.kaggle.com/code/chiakazirim/duck-qwen3-8-tuned) v1 | Akagha Chimgozirim | 4.50 | 09-04 | base + `analyzer_timeout = 1200` (same code: 4.08 and 2.81 elsewhere) | Flash-Next, c8 | 5.16 |
 | 3 | [wuliao0/duck-qwen3-8-anim-base](https://www.kaggle.com/code/wuliao0/duck-qwen3-8-anim-base) v13 | wuliao_0 | 4.33 | 09-18 | **≡ base** (13 daily versions; best-of) | Flash-Next, c8 | 5.78 |
 | 4 | [muhibullahansir/duck-qwen3-8-anim-base](https://www.kaggle.com/code/muhibullahansir/duck-qwen3-8-anim-base) v34 | Muhibullah Ansir | 4.16 | 09-26 | base + **ACTION7→"UNDO" mapping** + 7,600 s per game + private `/tmp` job dir + audit logger. MTP A/B arm switch. | Flash-Next, c8 | 8.28 |
@@ -182,7 +188,40 @@ Files: `serving_setup.py` (123 KB), `vllm-patches/`, `vllm_server_watchdog.py` i
 - **Launch command:** `--quantization modelopt_fp4 --dtype bfloat16 --kv-cache-memory-bytes 5368709120 (5 GiB) --max-model-len 32768 --max-num-seqs 8 --max-num-batched-tokens 8192 --async-scheduling --enable-chunked-prefill --max-cudagraph-capture-size 32 --no-enable-prefix-caching --tool-call-parser qwen3_coder --reasoning-parser qwen3 --speculative-config {"method":"mtp","num_speculative_tokens":3}`.
 - **Watchdog:** polls `/v1/models` every 15 s and restarts after 4 failures (at most 2 restarts). Setup (queue, runtime, 135 GB load) takes **about 63 min** of the 9 h according to yanggod.
 - **Measured throughput:** about **230–240 generated tok/s aggregate**, about 1.8M generated tokens per 2.2 h over 25 concurrent games. The GPU is saturated: there are 26–50 `analyzer request failed … Read timed out` events per run.
-- **KV cache is the binding constraint.** With 5 GiB, only 8 × 32k sequences fit, while 28 games compete for them. scottlegrand's fix: `max_num_seqs=16` with the analyzer context halved to 16k in the same 5 GiB. amanatar's attempt at 16 GB KV **failed to start** (vllm-setup-failure.json).
+- **KV cache is the binding constraint.** The 5 GiB pool holds only 105k tokens, about 3.2 × 32k contexts, while 28 games compete for them (§5.3).
+  - scottlegrand's attempted fix (`max_num_seqs=16` with the analyzer context halved to 16k) does not work, because the 16k setting is overridden.
+  - amanatar's attempt at 16 GB KV with MTP on **failed to start** (vllm-setup-failure.json).
+
+### 5.3 Where the GPU time goes: vLLM metrics from 24 commit runs (the most actionable finding)
+
+Source: `output/vllm-metrics-final.prom` of every pulled Flash-Next run. The runs are 2.2 h each on the 25 public games.
+
+| Run | Requests | Queue share of e2e latency | Mean e2e | Decode | Preemptions | Generated tokens | MTP acceptance |
+|---|---|---|---|---|---|---|---|
+| Stock profile (MTP3, KV 5 GiB, c8), 19 full-length runs | 1,280–1,520 | **≈ 87 %** | 128–147 s | 15–17 s | 16–253 | 1.9–2.0 M | 0.59–0.60 |
+| **scottlegrand = user notebook** (MTP3, KV 5 GiB, "c16 / ctx16k", 2.0 h cap) | 1,045 | **86.6 %** | **168 s** | 20 s | **342** | 1.80 M | 0.60 |
+| thui-fast-b78: MTP **off**, KV 5 GiB, c8 | 1,622 | 70.8 % | 120 s | 33 s | 53 | 2.24 M | – |
+| **thui-m0-s20: MTP off, KV 7 GiB, 20 seqs** | **1,838** | **56.8 %** | **105 s** | 43 s | 64 | **2.68 M** | – |
+
+What the numbers say:
+- **A request spends about 87 % of its life waiting in vLLM's queue.** Prefill is only about 1.6 s and decode about 16 s, against a mean e2e of about 140 s.
+- The server log explains why:
+  - With MTP3 the weights take **81.8 GiB**, and the 5 GiB KV pool holds only **105,202 tokens**. That is 3.2 × 32k contexts, or about 5 prompts at the measured median prompt length of 21k tokens (p90 23k).
+  - So 28 games share about 5 in-flight requests. `max_num_seqs = 8` or 16 changes nothing: the KV pool is the binding limit.
+- **MTP costs about 7.5 GiB and a large per-token KV share.** Without MTP, weights take **74.3 GiB** and the *same* 5 GiB holds **188,059 tokens**. MTP acceptance is only about 0.6 of drafted tokens at temperature 0.6.
+- Thuitanium's `thui-l4-*` serving benchmark (no games; real 22–24k-character analyzer prompts; files in `SCRATCH/kaggle/notebooks/_thui_l4/`):
+
+  | Profile | Aggregate tok/s at 25-way | Median request time |
+  |---|---|---|
+  | Stock MTP3 / KV 5 GiB / c8 | **359** | 114 s |
+  | MTP3, c16 or c28 | 356–361 (no gain) | |
+  | **MTP0 / KV 7 GiB / c16** | **570** | 59 s |
+  | **MTP0 / KV 7 GiB / c28** | **722** | 65 s |
+
+- **Bug in the user's notebook (scottlegrand):** the cell sets `LOCAL_ANALYZER_CONTEXT_WINDOW = 16384`, but `serving_setup.py` then persists `LOCAL_ANALYZER_CONTEXT_WINDOW = 32768` into `taaf_setup_env.json`, and the notebook re-applies that env *after* setup. The run's `taaf_setup_env.json` shows 32768, and the measured prompts have a median of 21k tokens. So the "ctx16k → 2× slots" idea never took effect, and c16 only added preemptions (342).
+- **Caveat: more throughput alone did not raise the local score.** thui-m0-s20 played 5,722 actions (vs about 3,500) and cleared 39 levels (base 32–41), but scored locally only 5.62. Over 29 full local runs, local score correlates with **levels cleared (r = 0.88)** and not with action count (r = −0.03).
+  - Extra throughput has to be turned into levels: longer deliberation per step, or more games in parallel on the 110-game hidden set. It should not become more, cheaper actions.
+  - On the hidden set throughput matters more, because the 4th wave is time-starved.
 
 ## 6. Deep dives
 
@@ -191,6 +230,8 @@ Files: `serving_setup.py` (123 KB), `vllm-patches/`, `vllm_server_watchdog.py` i
 Files: `SCRATCH/kaggle/notebooks/scottlegrand__taaf-flashnext-sheetu12b-0922/`. A flat copy is in `taaf-flashnext-sheetu12b-0922.py`; cell 10 holds about 2,700 lines of patches. A diff against `SCRATCH/nb/user_nb_code.py` shows only output lines.
 
 - **Serving profile `kv5-bf16-mtp3-c16-cg32-ctx16k`:** 16 sequences, `LOCAL_ANALYZER_CONTEXT_WINDOW=16384`, KV 5 GiB, MTP3, no prefix cache.
+  - **The ctx16k override is ineffective:** `taaf_setup_env.json` in the run shows 32768, and prompts have a median of 21k tokens.
+  - With a 105k-token KV pool, c16 only yields **342 preemptions** (vs 16–253 for stock c8), a mean request latency of 168 s, and 87 % of that spent queued. See §5.3.
 - **AGENTFIX switches** (the "c16 + v8" set). Switches marked on are live:
   - **F1 images (on):** history keeps images only for the newest 2 image-bearing messages. The token estimator charges a flat 120 tokens per image instead of `len(b64)/3`, which over-charged 5–8× and evicted reasoning. Notes in the code: "median 8 obsolete boards per request, ~26 % of budget"; stripping *all* images caused "+51 % reasoning and 29 % fewer actions per 2 h".
   - **F3 memory (on):** a tolerant parser for `World model (revised):` and similar labels. **Game over no longer wipes the world model**, since a game over is a retry of the same level.
@@ -212,7 +253,7 @@ Files: `SCRATCH/kaggle/notebooks/scottlegrand__taaf-flashnext-sheetu12b-0922/`. 
 - **Settings:** 7,920 s per game, concurrency 28, `analyzer_timeout 900`. The local validation run is capped at 2 h: mean **10.02**, 2,453 actions, 43 levels, 1.70M tokens, 236 tok/s. Best games: ft09 47.6, lp85 41.0, ar25 27.8.
 - **Why it is probably the best public notebook:**
   - It is the only public variant that gives the model *new information*, the animation frames, in a form it actually uses: pixels and sandbox data rather than narration.
-  - It also frees context and KV for more concurrent requests: c16 and image trimming.
+  - It was also *meant* to free context and KV for more concurrent requests (c16 plus image trimming). In practice only the image trimming works; see the ctx16k note above.
 
 ### 6.2 keithtyser base (3.38; cluster mean 3.29) and its pure-luck forks (#3, #8, #9, #11, and others)
 
@@ -245,12 +286,21 @@ Described in §5.2.
 ### 6.6 Thuitanium team (yocybercode + sahasawatt, LB 5.36): `thui-*` A/B notebooks
 
 - They publish **arm/control pairs over the full public 25** (`-v0` vs `-ctl`, `full25-r1`), each with a permutation-test rationale. Examples: thui-l1 (HUD band), thui-wm (world model), thui-db, thui-af, thui-rs, thui-m0-s20, thui-a7 (ACTION7), thui-gemma, thui-compact, thui-reflect, thui-rank.
-- Local results (single runs):
-  - thui-l1-v0 **10.93**;
-  - thui-animfast **9.56**;
-  - thui-fast-v0 9.32 (≡ base);
-  - thui-fast-b78-mtp0 6.96 (MTP off).
-- LB results: 3.60 / 3.74 / 3.21 / 3.49. None separates from the base on the LB.
+- Full-25 local results (single runs; the base's own local spread is about ±0.9):
+
+  | Arm | Change | Arm local | Control local |
+  |---|---|---|---|
+  | thui-l1 | HUD band `no_impact` | **10.93** (44 levels) | ctl **8.64** (41 levels) |
+  | thui-wm | keep world model across in-level game over | 7.44 (39 levels) | ctl 8.32 (36 levels) |
+  | thui-anim-full25-r2 | anim bundle, stock knobs | **10.56** (40 levels, only 2,557 actions) | – |
+  | thui-animfast | anim bundle + seed / yield 180 | 9.56 (39 levels, 2,008 actions) | – |
+  | thui-fast-v0 | ≡ base | 9.32 | – |
+  | thui-fast-b78 | MTP off | 6.96 (40 levels, 4,049 actions) | – |
+  | thui-m0-s20 | MTP off, KV 7 GiB, 20 seqs | 5.62 (39 levels, **5,722 actions**) | – |
+
+- LB results: thui-l1 3.60, thui-animfast 3.74, thui-fast-v0 3.21, thui-fast-b78 3.49. None separates from the base on the LB.
+- The anim-bundle runs reach the same number of levels with **far fewer actions**, because the hard no-op guard avoids wasted repeats. That efficiency is what the RHAE metric rewards.
+- Their L4 serving benchmark (§5.3) is the most useful serving measurement in the public record.
 - Useful mechanisms:
   - **L1 HUD-band learner**: rows changing on ≥ 90 % of the first ≥ 20 actions, at most 4 rows, set `no_impact`.
   - **animfast**: jakobbrggen's anim bundle. It adds `last_action_result['animation']` with `frames`, `unique_frames`, `board_unchanged` and `transient_pixels`/`transient_bbox`, an `animation(frame=k, region=…)` retrieval tool, a proactive hint after ≥ 6 turns without progress on type-1 animations, and a **hard no-op guard** keyed on (level, board-hash, action).
@@ -324,6 +374,10 @@ Result: LB 3.57 and local 5.83. There is no measurable gain on this model, which
 
 - **Keep:** the scottlegrand/AGENTFIX stack as the baseline. It is already the user's notebook and the best public evidence. The F13 frames, F19 sheet and ×12 board image are the parts with some hidden-LB support.
 - **Cheap and plausibly positive, not yet combined in one notebook:**
+  0. **Re-tune serving:** `TAAF_VLLM_MTP_TOKENS=0`, `TAAF_VLLM_KV_CACHE_MEMORY_BYTES` about 7–10 GiB (Thuitanium used 7 GiB, which is safe; weights drop from 81.8 to 74.3 GiB), `TAAF_VLLM_MAX_NUM_SEQS` 16–28, and prefix caching on.
+     - Also fix the ctx16k override: set `LOCAL_ANALYZER_CONTEXT_WINDOW` after the setup loop, or patch the persisted `taaf_setup_env.json`. The goal is for 28 games' requests to actually run in parallel.
+     - Expected effect: 1.6–2× decode throughput, and queueing falls from 87 % to about 57 %.
+     - Pair this with a larger per-turn budget (thinking and tool steps), so the extra throughput turns into cleared levels rather than extra actions.
   1. `ACTION7→UNDO` mapping (muhibullahansir) or AGENTFIX F6. Undo is currently unusable in Duck, and some public games expose it.
   2. **Wave-fit** per-game budget for about 110 games (yanggod). Also consider giving games that clear levels more time than games that are stalled: AGENTFIX F10 exists but is off.
   3. `analyzer_timeout 1200`, because saturated runs time out 30–50 times.
@@ -333,7 +387,7 @@ Result: LB 3.57 and local 5.83. There is no measurable gain on this model, which
 - **Do not:**
   - refuse or block known no-ops (AGENTFIX v3 regression);
   - narrate animations in text (2.57);
-  - raise the KV cache above about 9 GB (setup fails);
+  - raise the KV cache to 16 GB *with MTP on* (amanatar v40: setup fails);
   - raise `max_runtime_s_per_game` far above the wave-fit value (2.58);
   - trust a single local 25-game run (r = 0.11) or a single LB submission (sd 0.5).
 - **Methodology:** judge a change by **several LB submissions** or by **a large local sample** (≥ 3 seeds × 25 games), as Thuitanium tries to. The public field's history is mostly best-of-N luck.
@@ -352,6 +406,8 @@ All paths are under `SCRATCH/kaggle/`.
 - `notebooks/<owner>__<slug>/`: latest source (`.ipynb` plus a flattened `.py` for the ones read), `kernel-metadata.json`, `output_files.txt` and `output/`. The output holds `score.json`, `benchmark.json`, `transcripts/`, `prompts/`, logs and vLLM logs; bulk per-game event and viewer JSON is skipped. For amanatar, cassowaryloraforge, woguoat and cotrd-enhanced, the scored version is in `listed_version_vN/`.
 - `notebooks/_scoreprobe/<owner>__<slug>/score.json` and `probe_local_scores.json`: local public-25 scores for about 50 Duck-family notebooks. `local_results.json` covers the fully pulled ones.
 - `notebooks/local_results.json`: per-game local scores for the pulled notebooks.
+- `notebooks/_thui_sources/`: listed-version sources of all 64 Thuitanium (`sahasawatt`, `yocybercode`) notebooks. `notebooks/_thui_l4/*/l4_bench.json` holds their vLLM serving benchmark.
+- `*/output/vllm-metrics-final.prom` and `*/output/vllm-openai-server.log`: the per-run vLLM metrics behind §5.3.
 - `datasets/` (solver code; small):
   - `keithtyser__duck-qwen38-nvfp4-mtp-vllm-smoke-v1` (70 MB unzipped): Duck source, serving setup, vLLM PLE patch, watchdog, pickled benchmark;
   - `jeroencottaar__taaf-kaggle-source-share` and `jeroencottaar__taaf-kaggle-source`: Tufa June;
