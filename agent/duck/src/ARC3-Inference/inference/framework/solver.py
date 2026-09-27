@@ -1353,6 +1353,26 @@ class HarnessSolver(Solver):
         index: int,
         pass_index: int,
         local_server: _LocalServerRuntime | None = None,
+        scheduler_gate: Any = None,
+    ) -> None:
+        try:
+            self._play_one_inner(game, index, pass_index, local_server, scheduler_gate)
+        finally:
+            if scheduler_gate is not None:  # [DUCK-PATCH B08_SCHEDULER] free the game's active spot
+                run = game.game_run
+                with contextlib.suppress(Exception):
+                    scheduler_gate.finish(
+                        self._run_stem(run.game_id if run is not None else str(index), pass_index),
+                        str(getattr(run, "state", "finished")),
+                    )
+
+    def _play_one_inner(
+        self,
+        game: taaf.game.Game,
+        index: int,
+        pass_index: int,
+        local_server: _LocalServerRuntime | None = None,
+        scheduler_gate: Any = None,
     ) -> None:
         try:
             assert game.game_run is not None
@@ -1374,6 +1394,7 @@ class HarnessSolver(Solver):
                 analysis_html_relpath=analysis_relpath,
                 stop_event=self._stop_event,
                 viewer_data_path=viewer_data_path,
+                scheduler_gate=scheduler_gate,
             )
             session.play()
         except Exception as exc:

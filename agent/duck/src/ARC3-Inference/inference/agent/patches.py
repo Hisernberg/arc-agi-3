@@ -26,13 +26,15 @@ PATCH_IDS = (
     "P3_DISCIPLINE",
     "M1_THINK",
     "M2_FACTS",
+    # [DUCK-PATCH B08_SCHEDULER] progress-aware turn scheduler (agent/scheduler.py, framework/solver.py).
+    "B08_SCHEDULER",
 )
 
 # The v9 group (DUCK_PATCHES_V9=0 turns all of these off).
 V9_PATCH_IDS = ("P1_SCORING", "P2_UNDO", "P3_DISCIPLINE", "M1_THINK", "M2_FACTS")
 
 # Off unless explicitly enabled: they change what the model remembers and need a GPU A/B first.
-DEFAULT_OFF = frozenset({"M1_THINK", "M2_FACTS"})
+DEFAULT_OFF = frozenset({"M1_THINK", "M2_FACTS", "B08_SCHEDULER"})  # B08: changes scheduling, opt-in
 
 _OFF = {"0", "false", "no", "off"}
 

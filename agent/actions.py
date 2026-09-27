@@ -439,7 +439,7 @@ class ActionChannel:
     def __init__(self, env: Any, perceiver: Optional[Perceiver] = None, step_fn: Optional[Callable] = None,
                  initial: Any = None, competition: bool = True, guard_noops: bool = True,
                  guard_deaths: bool = True, guard_reset_at_start: bool = True, guard_unavailable: bool = True,
-                 animated_noop_repeats: int = 2):
+                 noop_exempt: Iterable[int] = (7,), block_animated_noops: bool = False):
         self.env = env
         self.P = perceiver or Perceiver()
         self._step_fn = step_fn or self._default_step
@@ -448,7 +448,11 @@ class ActionChannel:
         self.guard_deaths = guard_deaths
         self.guard_reset_at_start = guard_reset_at_start
         self.guard_unavailable = guard_unavailable
-        self.animated_noop_repeats = animated_noop_repeats
+        # ACTION7 is UNDO in the ARC-AGI-3 action set: its effect depends on history, not on the frame.
+        self.noop_exempt = set(noop_exempt)
+        # a step that animates but ends where it started may still change hidden state (e.g. a rewind
+        # that records a ghost, a demo that plays once): not blocked unless asked
+        self.block_animated_noops = block_animated_noops
         self.obs = normalize_obs(initial if initial is not None else self._initial_obs(env))
         self.P.reset(self.obs.frame, self.obs.levels_completed)
         # accounting (scorer-consistent)
@@ -463,6 +467,7 @@ class ActionChannel:
         self.noop_mem: Counter = Counter()  # (level, hash, key) -> times seen with no effect
         self.anim_noop_mem: Counter = Counter()
         self.death_mem: set = set()
+        self.ok_mem: set = set()  # (level, masked hash, key) executed without GAME_OVER
         self.attempt = Attempt(self.level, self._frame_copy())
         self.attempts: dict[int, list[Attempt]] = {}  # level -> closed attempts
         self.solutions: dict[int, list[tuple]] = {}  # level -> winning action list
@@ -559,7 +564,8 @@ class ActionChannel:
             mk = (self.level, h, k)
             if self.guard_deaths and (mk in self.death_mem or (self.level, he, k) in self.death_mem):
                 return "known GAME_OVER transition"
-            if self.guard_noops and (self.noop_mem[mk] >= 1 or self.anim_noop_mem[mk] >= self.animated_noop_repeats):
+            if self.guard_noops and aid not in self.noop_exempt and (
+                    self.noop_mem[mk] >= 1 or (self.block_animated_noops and self.anim_noop_mem[mk] >= 2)):
                 return "known no-op here"
         return None
 
@@ -640,17 +646,20 @@ class ActionChannel:
             self.attempt = Attempt(self.level, self._frame_copy())
             return
         if obs.state == "GAME_OVER":
-            # exact key always; HUD-masked key only when the death is not plausibly budget exhaustion
-            # (with the timer masked, a budget death would otherwise ban a harmless action forever)
+            # Exact (unmasked) key always. The HUD-masked key only when the death is (a) not plausibly
+            # budget exhaustion (with the timer masked, a budget death would ban a harmless action) and
+            # (b) not history-dependent: the same visible (state, action) never survived before.
             he = "x" + masked_hash(prev_obs.frame, None, lvl) if prev_obs.frame is not None else "none"
             budget = self._budget_nearly_out(prev_obs.frame)
             for k in keys:
                 self.death_mem.add((lvl, he, k))
-                if not budget:
+                if not budget and (lvl, h_before, k) not in self.ok_mem:
                     self.death_mem.add((lvl, h_before, k))
             self._close_attempt("game_over")
             self.attempt = Attempt(lvl, self._frame_copy())  # placeholder until the RESET
             return
+        for k in keys:
+            self.ok_mem.add((lvl, h_before, k))
         if pc.noop:
             mem = self.noop_mem if len(obs.frames) <= 1 else self.anim_noop_mem
             for k in keys:
