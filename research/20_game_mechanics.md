@@ -21,14 +21,14 @@ Items marked *(inferred)* come from code I skimmed rather than traced exactly.
 | game | tag / actions | lv | sum of baselines | genre (one line) | L1 opt / human |
 |---|---|---|---|---|---|
 | ar25 | kb+click 1-7 | 8 | 748 | move pieces and mirror axes so pieces + reflections cover targets | **15** / 32 |
-| bp35 | kb+click 3,4,6,7 | 9 | 651 | side-view gravity platformer; click to break/toggle/flip gravity; reach gem | see note |
+| bp35 | kb+click 3,4,6,7 | 9 | 651 | side-view gravity platformer; click to break/toggle/flip gravity; reach gem | t/o d7 / 21 |
 | cd82 | kb+click 1-6 | 6 | 171 | move paint bucket around canvas, pick color, pour halves/triangles to copy target | **5** / 55 |
 | cn04 | kb+click 1-6 | 6 | 789 | jigsaw: select/move/rotate pieces until all connector pixels pair up | t/o d7 / 29 |
 | dc22 | kb+click 1-4,6 | 6 | 1228 | walk on tiles to goal; buttons toggle bridges; crane carries bridge pieces | **20** / 59 |
 | ft09 | click 6 | 6 | 208 | lights-out-like color cycling to satisfy neighbor-equality clues | **4** / 43 |
-| g50t | kb 1-5 | 7 | 879 | Braid-like: rewind to spawn a ghost replaying your path; ghosts hold plates | see note |
+| g50t | kb 1-5 | 7 | 879 | Braid-like: rewind to spawn a ghost replaying your path; ghosts hold plates | n/a (hidden state) / 78 |
 | ka59 | kb+click 1-4,6 | 7 | 730 | multi-block Sokoban: pushed blocks slide; bombs; fill target frames | **11** / 28 |
-| lf52 | click(+kb) 1-4,6,7 | 10 | 1339 | peg solitaire (jump & capture same color) on sliding platforms | see note |
+| lf52 | click(+kb) 1-4,6,7 | 10 | 1339 | peg solitaire (jump & capture same color) on sliding platforms | **8** / 32 |
 | lp85 | click 6 | 8 | 388 | buttons rotate tiles around interlocking loops; put marked tiles on goals | **5** / 17 |
 | ls20 | kb 1-4 | 7 | 776 | maze; walk over changers to set key shape/color/rotation; open doors | **13** / 22 |
 | m0r0 | kb+click 1-6 | 6 | 1107 | mirrored twins move together (x-mirrored); make pairs meet | **15** / 30 |
@@ -36,20 +36,22 @@ Items marked *(inferred)* come from code I skimmed rather than traced exactly.
 | re86 | kb+click 1-5 | 8 | 1255 | move outline shapes (cycle selection) to compose target picture; recolor wells | t/o d9 / 26 |
 | s5i5 | click 6 | 8 | 638 | robot arms: sliders extend/shrink colored segments, buttons rotate; reach targets | **13** / 20 |
 | sb26 | kb+click 5,6,7 | 8 | 213 | drag color tokens into program slots (with subroutine calls); run to match sequence | t/o d5 / 18 |
-| sc25 | kb+click 1-4,6 | 6 | 350 | maze + 3x3 rune grid: draw spell patterns (fire / enlarge / teleport) to reach exit | see note |
+| sc25 | kb+click 1-4,6 | 6 | 350 | maze + 3x3 rune grid: draw spell patterns (fire / enlarge / teleport) to reach exit | t/o d7 / 36 |
 | sk48 | kb+click 1-4,6,7 | 8 | 1070 | telescoping arms push colored blocks; reproduce reference color order | **14** / 61 |
 | sp80 | kb+click 1-6 | 6 | 518 | place deflector bars, pour water, fill all cups, avoid forbidden zones | **4** / 39 |
 | su15 | click 6,7 | 9 | 361 | click = vacuum pulse pulling fruits; same-level fruits merge; deliver to goal | t/o d4 / 22 |
-| tn36 | click 6 | 7 | 317 | toggle bits of instruction rows (opcodes), run program so piece reaches target | see note |
+| tn36 | click 6 | 7 | 317 | toggle bits of instruction rows (opcodes), run program so piece reaches target | t/o d6 / 32 |
 | tr87 | kb 1-4 | 6 | 414 | glyph translation by rewrite rules; cursor + cycle glyph variants | t/o d8 / 54 |
 | tu93 | kb 1-4 (tag kb+click) | 9 | 462 | arrow through corridor maze to exit; sentries, patrols, mimics | **18** / 19 |
 | vc33 | click 6 | 7 | 447 | communicating vessels: pumps move liquid between paired columns; floats to marks | **3** / 7 |
-| wa30 | kb 1-5 | 9 | 1843 | warehouse: grab/drag boxes into zone; helper NPCs carry, thief NPCs steal | see note |
+| wa30 | kb 1-5 | 9 | 1843 | warehouse: grab/drag boxes into zone; helper NPCs carry, thief NPCs steal | t/o d12 / 71 |
 
-Notes: rows marked "see note" were still running or unsolved when this table was frozen; section 4 has
-the final BFS results. In 15 of the 16 games solved so far, level 1 was solved in ≤ 50% of the human
-baseline, the exception being tu93 (18 vs 19). Humans' baselines contain exploration, so an agent that
-already understands a game can hit the 115 cap per level. The whole difficulty is *learning the game cheaply*.
+Notes: BFS solved level 1 of **15/25 games**. For those 15 the optimum is on average **31% of the human
+baseline** (151 vs 486 actions in total), and 12 of the 15 need ≤ 50% of it. The exceptions are tu93 (18 vs 19),
+s5i5 (13 vs 20) and ls20 (13 vs 22). Human baselines contain exploration, so an agent that already
+understands a game can hit the 115 cap per level. **The whole difficulty is learning the game cheaply.**
+Unsolved rows are search-budget limits (large click branching, or hidden state that the sprite key
+does not capture: g50t's ghost recordings), not impossibility. The solutions are listed under "Level-1 BFS solutions" below.
 
 ---
 
@@ -244,7 +246,8 @@ already understands a game can hit the 115 cap per level. The whole difficulty i
 - **Levels 6**, baselines 36 6 32 83 143 50. Mana budget 50 25 50 35 65 60 (moves and rune toggles both cost 1).
 - **Actions**: ACTION1-4 walk 2 px (4 when enlarged). ACTION6 on the 3x3 rune grid toggles a cell. When the
   pattern equals a spell allowed in this level, it casts: vertical line = fire (burns obstacles ahead),
-  diamond ring = enlarge x2, corner = swap/teleport *(inferred)*. Spell-book icons play a demo when
+  diamond ring = enlarge x2 (then 4 px per step), corner = teleport onto the linked target
+  sprite. The fireball flies in the facing direction up to the first obstacle and destroys it. Spell-book icons play a demo when
   clicked. Level 1 auto-plays the demo on the **first action** (22 frames, no other effect); levels 1-3
   pre-select the level's spell.
   Pickups refund mana.
@@ -326,6 +329,34 @@ already understands a game can hit the 115 cap per level. The whole difficulty i
   boxes to their own zone. Some cells are no-walk.
 - **Win**: every box is inside a target zone and released. **Skill**: transport planning, exploiting and
   countering NPC policies.
+
+---
+
+## Level-1 BFS solutions (verified by replay; `SCRATCH/bfs_l1*.jsonl`)
+
+Action notation: `1-5` = ACTION1-5, `6:x,y` = click at display (x, y).
+
+| game | optimum / human | shortest action sequence |
+|---|---|---|
+| vc33 | 3 / 7 | 6:60,32 x3 (pump the same column three times) |
+| r11l | 3 / 22 | 6:36,4 6:28,60 6:40,28 |
+| ft09 | 4 / 43 | 6:36,36 6:36,44 6:52,44 6:36,52 |
+| sp80 | 4 / 39 | 4 4 4 5 (slide the bar right 3, pour) |
+| cd82 | 5 / 55 | 3 2 2 4 5 (move bucket around ring, pour) |
+| lp85 | 5 / 17 | 6:4,29 x5 (rotate loop A left five times) |
+| lf52 | 8 / 32 | 6:16,17 6:28,17 6:28,17 6:40,17 6:40,17 6:40,29 6:40,35 6:40,23 (select peg, click landing, repeat) |
+| ka59 | 11 / 28 | 4 4 4 3 2 3 3 3 6:42,30 1 4 |
+| ls20 | 13 / 22 | 3 3 3 1 1 1 1 4 4 4 1 1 1 |
+| s5i5 | 13 / 20 | 6:43,18 x7, 6:21,42 x6 (extend color A 7x, color B 6x) |
+| sk48 | 14 / 61 | 1 1 1 4 4 4 4 3 2 2 4 3 1 4 |
+| ar25 | 15 / 32 | 2 x10, 3 x5 (move piece down 10, left 5) |
+| m0r0 | 15 / 30 | 1 1 3 1 3 1 1 1 1 1 4 1 4 4 4 |
+| tu93 | 18 / 19 | 4 2 2 4 1 4 2 2 3 3 2 4 4 2 4 1 4 2 |
+| dc22 | 20 / 59 | 1 6:45,34 1 1 1 1 4 4 4 4 4 6:45,34 6:45,17 1 1 1 1 1 4 4 |
+
+No solution within budget: cn04 (depth 7 reached), re86 (9), sb26 (5), su15 (4, 256 click targets), tr87 (8),
+tn36 (6), sc25 (7), wa30 (12), bp35 (7). g50t's search space was exhausted under a sprite-only key that
+misses the ghost recordings.
 
 ---
 

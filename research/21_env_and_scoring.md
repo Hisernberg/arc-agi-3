@@ -18,7 +18,8 @@ Sources read: `arc_agi` 0.9.8 (`base.py`, `local_wrapper.py`, `wrapper.py`, `sco
   key their undo tables by the builtin `id()` of live objects. For those two, deepcopy diverges
   (bp35) or blows up memory until the process is OOM-killed (lf52: 11.5 GB). `arcenv.deepcopy_remap_ids`
   rewrites stale ids and makes all 25 games clone-exact: tested over 200 random actions with
-  snapshots every 25 steps, comparing state, levels and every frame. A clone takes about 1-11 ms. All
+  snapshots every 25 steps, comparing state, levels, the settled frame and the animation length.
+  A clone takes about 1-11 ms. All
   games are deterministic under replay. The only randomness is lf52's `np.random.shuffle` dissolve
   animation and tr87's fixed-seed `random.Random`.
 - **The online API works** with our key. `GET /api/games` lists **exactly the same 25 games with the same
@@ -155,9 +156,10 @@ official scorecard reproduces.
   anyway), but wasted exploration is punished quadratically.
 - Beating the baseline pays up to 115 on that level, and it only helps to offset inefficient levels. When all
   levels are done the game is capped at 100. Baselines are "upper-median first-time human" counts
-  and contain human exploration. Offline BFS optima for level 1 are often far below them:
-  ft09 4 vs 43, lp85 5 vs 17, ka59 11 vs 28, ls20 13 vs 22, ar25 15 vs 32, m0r0 15 vs 30,
-  s5i5 13 vs 20, vc33 3 vs 7, tu93 18 vs 19. Full list in `20_game_mechanics.md`.
+  and contain human exploration. Offline BFS optima for level 1 are usually far below them:
+  cd82 5 vs 55, ft09 4 vs 43, sp80 4 vs 39, r11l 3 vs 22, sk48 14 vs 61, dc22 20 vs 59, lf52 8 vs 32,
+  ka59 11 vs 28, lp85 5 vs 17. Over the 15 games solved, the optimum is 151 vs 486 human actions (31%).
+  Full list in `20_game_mechanics.md`. Knowing the rules is worth the 115 cap.
 - Weights: level k of an n-level game weighs `2k/(n(n+1))`. The first level alone caps the game at
   2.2-4.8%. Completing the first 4 levels at baseline efficiency caps it at 18-48% (table below).
   Getting deep into games matters more than being perfect on early levels.
