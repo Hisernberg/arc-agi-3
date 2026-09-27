@@ -161,7 +161,7 @@ official scorecard reproduces.
   ka59 11 vs 28, lp85 5 vs 17. Over the 15 games solved, the optimum is 151 vs 486 human actions (31%).
   Full list in `20_game_mechanics.md`. Knowing the rules is worth the 115 cap.
 - Weights: level k of an n-level game weighs `2k/(n(n+1))`. The first level alone caps the game at
-  2.2-4.8%. Completing the first 4 levels at baseline efficiency caps it at 18-48% (table below).
+  1.8-4.8%. Completing the first 4 levels at baseline efficiency caps it at 18-48% (table below).
   Getting deep into games matters more than being perfect on early levels.
 - Every retry and RESET is charged to the current level. A GAME_OVER costs everything spent in the
   level plus the RESET, and the level restarts from scratch with the counter still running.
@@ -239,8 +239,8 @@ official scorecard reproduces.
 
 ## 8. Kaggle notes
 
-- The notebook plays through a gateway with `OperationMode.COMPETITION` (`ARC_BASE_URL`), a
-  `RestAPI(competition_mode=True)` server. Section 4 semantics apply: one scorecard, one guid per game,
+- The notebook plays through a gateway with `OperationMode.COMPETITION` (`ARC_BASE_URL`). The gateway is
+  presumably the same `RestAPI(competition_mode=True)` server code shipped in the wheel. If so, section 4 semantics apply: one scorecard, one guid per game,
   RESET at a level start is swallowed but charged, and unplayed games score 0.
 - `ONLY_RESET_LEVELS=true` changes `handle_reset` in the process that runs the games. Setting it in the
   agent (client) process has no effect on a remote gateway.
