@@ -217,8 +217,8 @@ class ProgressScheduler:
     def active(self) -> list[GameRecord]:
         return [g for g in self.games.values() if g.state in (WAITING, RUNNING)]
 
-    def _vmin(self) -> float:
-        act = [g.vtime for g in self.active()]
+    def _vmin(self, exclude: GameRecord | None = None) -> float:
+        act = [g.vtime for g in self.active() if g is not exclude]
         return min(act) if act else 0.0
 
     def _log(self, now: float, kind: str, gid: str = "", detail: str = "") -> None:
@@ -365,7 +365,7 @@ class ProgressScheduler:
             g.levels = int(levels)
             g.turns_on_level = 0
             g.last_clear_turn = g.turns
-            g.vtime = min(g.vtime, self._vmin())  # a clear moves the game to the front of the queue
+            g.vtime = min(g.vtime, self._vmin(exclude=g) - 1e-6)  # a clear moves the game to the front
             self._log(now, "clear", gid, f"level={g.levels}")
         elif executed:
             g.turns_on_level += 1
