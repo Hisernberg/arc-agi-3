@@ -248,10 +248,16 @@ def _edge_hist(g: np.ndarray, ignore: Optional[np.ndarray] = None) -> tuple[np.n
     hc[1:] = dh.sum(axis=0)
     vr = np.zeros(g.shape[0], np.int64)
     vr[1:] = dv.sum(axis=1)
+    # HUD strips live on the outermost lines and are drawn at display resolution; long straight
+    # separators (panel borders, split backgrounds) need not sit on the camera grid either.
+    hc[[1, -1]] = 0
+    vr[[1, -1]] = 0
+    hc[hc >= 0.75 * g.shape[0]] = 0
+    vr[vr >= 0.75 * g.shape[1]] = 0
     return hc, vr
 
 
-def _best_scale(hc: np.ndarray, vr: np.ndarray, max_scale: int = 8, tol: float = 0.03,
+def _best_scale(hc: np.ndarray, vr: np.ndarray, max_scale: int = 8, tol: float = 0.04,
                 min_edges: int = 12) -> tuple[int, int, int]:
     tot_h, tot_v = int(hc.sum()), int(vr.sum())
     if tot_h + tot_v < min_edges:
@@ -274,7 +280,7 @@ def _best_scale(hc: np.ndarray, vr: np.ndarray, max_scale: int = 8, tol: float =
 
 
 def detect_scale(frame: Any, ignore: Optional[np.ndarray] = None, max_scale: int = 8) -> tuple[int, int, int]:
-    """(scale, off_y, off_x): the largest s <= max_scale such that >= 97% of colour edges lie on the
+    """(scale, off_y, off_x): the largest s <= max_scale such that >= 96% of colour edges lie on the
     lines r = off_y (mod s), c = off_x (mod s). Games render a small camera grid upscaled by an integer
     factor (plus letterbox padding), so one grid cell = an s x s block. Returns (1, 0, 0) if none fits."""
     hc, vr = _edge_hist(to_grid(frame), ignore)

@@ -293,11 +293,13 @@ Described in §5.2.
   | thui-l1 | HUD band `no_impact` | **10.93** (44 levels) | ctl **8.64** (41 levels) |
   | thui-wm | keep world model across in-level game over | 7.44 (39 levels) | ctl 8.32 (36 levels) |
   | thui-anim-full25-r2 | anim bundle, stock knobs | **10.56** (40 levels, only 2,557 actions) | – |
-  | thui-animfast | anim bundle + seed / yield 180 | 9.56 (39 levels, 2,008 actions) | – |
+  | thui-animfast | anim bundle + seed / yield 180 | 9.56 (39 levels, 2,008 actions) | same code re-run (animfast-v1): **7.62**, i.e. the local noise |
+  | thui-a7-v1 | base + ACTION7 mapped | 8.23 | – |
   | thui-fast-v0 | ≡ base | 9.32 | – |
   | thui-fast-b78 | MTP off | 6.96 (40 levels, 4,049 actions) | – |
   | thui-m0-s20 | MTP off, KV 7 GiB, 20 seqs | 5.62 (39 levels, **5,722 actions**) | – |
 
+- Their other arms (cap, db, af, rs, the wm smoke) are 3–4-game smoke tests. They are too noisy to read: for example cap-ctl 15.23 vs cap-v0 5.87, and wm-v0 18.15 vs wm-ctl 2.84 on the same 3 games.
 - LB results: thui-l1 3.60, thui-animfast 3.74, thui-fast-v0 3.21, thui-fast-b78 3.49. None separates from the base on the LB.
 - The anim-bundle runs reach the same number of levels with **far fewer actions**, because the hard no-op guard avoids wasted repeats. That efficiency is what the RHAE metric rewards.
 - Their L4 serving benchmark (§5.3) is the most useful serving measurement in the public record.

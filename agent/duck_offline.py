@@ -217,10 +217,13 @@ class NetworkGuard:
         self._lock = threading.Lock()
         self._orig_connect = None
         self._orig_connect_ex = None
+        self._orig_getaddrinfo = None
+
+    _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
     def _check(self, address: Any) -> None:
         host, port = (address[0], int(address[1])) if isinstance(address, tuple) else (str(address), -1)
-        ok = host in {"127.0.0.1", "localhost", "::1"} and port in self.allowed_ports
+        ok = host in self._LOOPBACK and port in self.allowed_ports
         with self._lock:
             self.attempts.append((host, port, ok))
         if not ok:
@@ -241,13 +244,24 @@ class NetworkGuard:
                 guard._check(address)
             return guard._orig_connect_ex(sock, address)
 
+        self._orig_getaddrinfo = socket.getaddrinfo
+
+        def getaddrinfo(host: Any, *args: Any, **kwargs: Any) -> Any:
+            if host is not None and str(host) not in guard._LOOPBACK:
+                with guard._lock:
+                    guard.attempts.append((str(host), -1, False))
+                raise socket.gaierror(f"duck_offline network guard blocked a DNS lookup of {host!r}")
+            return guard._orig_getaddrinfo(host, *args, **kwargs)
+
         socket.socket.connect = connect  # type: ignore[method-assign]
         socket.socket.connect_ex = connect_ex  # type: ignore[method-assign]
+        socket.getaddrinfo = getaddrinfo  # type: ignore[assignment]
         return self
 
     def __exit__(self, *exc: Any) -> None:
         socket.socket.connect = self._orig_connect  # type: ignore[method-assign]
         socket.socket.connect_ex = self._orig_connect_ex  # type: ignore[method-assign]
+        socket.getaddrinfo = self._orig_getaddrinfo  # type: ignore[assignment]
 
     @property
     def blocked(self) -> list[tuple[str, int, bool]]:
