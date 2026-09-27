@@ -531,7 +531,7 @@ def run_rerun(ctx: RunContext, serving: ServingHandle) -> dict[str, Any]:
         names = [g for g in os.environ.get("HYDRA_DRY_GAMES", "ls20,vc33,ft09,ar25,sp80").split(",") if g]
         env_dir = offline_env_dir(ctx)
         games = offline_games(resolve_offline_ids(names, env_dir), env_dir)
-        soft_end = min(ctx.soft_deadline_epoch, time.time() + float(os.environ.get("HYDRA_DRY_DEADLINE_S", "40")))
+        soft_end = min(ctx.soft_deadline_epoch, time.time() + float(os.environ.get("HYDRA_DRY_DEADLINE_S", "120")))
         overrides = {"max_actions_per_game": int(os.environ.get("HYDRA_DRY_MAX_ACTIONS", "10"))}
     else:
         games = competition_games()
@@ -630,6 +630,18 @@ def server_log_facts(log_path: str | None) -> dict[str, Any]:
 
 
 def effective_config_report(ctx: RunContext, serving: ServingHandle, result: dict[str, Any] | None) -> dict[str, Any]:
+    try:
+        return _effective_config_report(ctx, serving, result)
+    except RuntimeError:
+        raise  # a strict (smoke) check failed: fail the commit
+    except Exception as exc:  # unreadable logs must not crash a rerun
+        log("EFFECTIVE_CONFIG_CHECK", ok=False, mismatches=[f"report failed: {exc!r}"])
+        if ctx.strict:
+            raise
+        return {"error": repr(exc), "mismatches": [repr(exc)]}
+
+
+def _effective_config_report(ctx: RunContext, serving: ServingHandle, result: dict[str, Any] | None) -> dict[str, Any]:
     statuses = transcript_statuses(ctx.working_dir)
     server = server_log_facts(serving.log_path)
     sched_path = ctx.working_dir / "hydra_scheduler.json"

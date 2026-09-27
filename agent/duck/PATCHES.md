@@ -94,9 +94,11 @@ Policy lives in `agent/scheduler.py` (loaded by file path, so no `sys.path` chan
   Knobs: `DUCK_PATCH_B08_SCHEDULER_CONFIG` = JSON of `SchedulerConfig` fields (+ `window_s`);
   summary JSON in `<job_dir>/hydra_scheduler.json` (or `DUCK_PATCH_B08_SCHEDULER_SUMMARY`); log lines
   `HYDRA_SCHED start|admit|retire|status|final`.
-- Evidence (simulation, `tests/test_scheduler.py`, 110 games / 28 slots / 28 k s): +6 % levels vs wave-fit and
-  +8 % vs stock TAAF at the 09-22 throughput (0.163 turns/s), +4 % at 4x throughput; stock's fourth wave gets
-  ~55 % of its budget, the scheduler's tail ~95 % of its head. Real-loop test: 4 games / 2 slots through the
+- Evidence (simulation, `tests/test_scheduler.py`, 110 games / 28 slots / 28 k s, 10 seeds): +4-6 % levels vs
+  wave-fit and +6-8 % vs stock TAAF at the 09-22 throughput (0.163 turns/s), +4 % at 4x throughput, winning 9-10
+  of 10 seeds; stock's fourth wave gets ~55 % of its head's service, the scheduler's tail ~85 %. With 16 slots or a
+  20 k s window stock never starts 26-46 games; the scheduler starts all. Synthetic games only: the real gain
+  needs a GPU A/B. Real-loop test: 4 games / 2 slots through the
   mock LLM, never > 2 concurrent `analyze()` calls, turns interleaved, per-game state isolated.
 
 ## P1 — true scoring rule + game clock (`DUCK_PATCH_P1_SCORING`, B07, default on)

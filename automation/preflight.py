@@ -12,7 +12,7 @@ Offline checks (always):
   sources       competition attached; the Hydra source dataset + the serving profile's datasets/model attached
   secrets       no credential in any file of NB_DIR (and --source-dir): token patterns + the literal values of
                 KAGGLE_API_TOKEN / HF_TOKEN / ARC_API_KEY / GITHUB_TOKEN / GH_TOKEN when set
-  notebook_json valid nbformat-4 JSON, code cells parse, no outputs, no shell magics
+  notebook_json valid nbformat-4 JSON, code cells compile (so no magics / shell escapes), no outputs
   smoke_wired   rerun detection via KAGGLE_IS_COMPETITION_RERUN, rerun branch -> run_rerun, commit branch ->
                 run_smoke (3 games x 8 min), teardown in a finally, placeholder parquet only in the smoke path
   time_budget   first action within the 15-min inactivity kill, soft deadline + teardown reserve <= 9 h, smoke
@@ -371,12 +371,10 @@ class Preflight:
             if cell.get("outputs"):
                 problems.append(f"cell {i}: has outputs")
             src = "".join(cell["source"]) if isinstance(cell.get("source"), list) else str(cell.get("source", ""))
-            if re.search(r"^\s*[!%]", src, re.M):
-                problems.append(f"cell {i}: shell/magic line")
-            try:
+            try:  # IPython magics / shell escapes (%x, !x) do not compile either
                 compile(src, f"<cell {i}>", "exec", flags=ast.PyCF_ALLOW_TOP_LEVEL_AWAIT, dont_inherit=True)
             except SyntaxError as exc:
-                problems.append(f"cell {i}: {exc.msg} (line {exc.lineno})")
+                problems.append(f"cell {i}: {exc.msg} (line {exc.lineno}; magics/shell escapes are not allowed)")
         self.add("notebook_json", "FAIL" if problems else "PASS", "; ".join(problems) or f"{len(nb.get('cells', []))} cells")
 
     def check_smoke(self) -> None:
@@ -400,17 +398,25 @@ class Preflight:
         if run_cell is None:
             problems.append("no cell calling both run_rerun and run_smoke")
         else:
-            tree = ast.parse(run_cell)
-            ifs = [n for n in ast.walk(tree) if isinstance(n, ast.If) and "TRUE_SUBMISSION" in ast.unparse(n.test)]
-            if not ifs:
+            try:
+                tree = ast.parse(run_cell)
+            except SyntaxError as exc:
+                tree = None
+                problems.append(f"run cell does not parse: {exc.msg}")
+            ifs = [] if tree is None else [
+                n for n in ast.walk(tree) if isinstance(n, ast.If) and "TRUE_SUBMISSION" in ast.unparse(n.test)]
+            if tree is None:
+                pass
+            elif not ifs:
                 problems.append("run branch is not conditioned on TRUE_SUBMISSION")
             else:
                 node = ifs[0]
                 body, orelse = ast.unparse(ast.Module(node.body, [])), ast.unparse(ast.Module(node.orelse, []))
                 if "run_rerun" not in body or "run_smoke" not in orelse:
                     problems.append("TRUE_SUBMISSION branch must call run_rerun, else run_smoke")
-            if not any(isinstance(n, ast.Try) and n.finalbody and "teardown" in ast.unparse(ast.Module(n.finalbody, []))
-                       for n in ast.walk(tree)):
+            if tree is not None and not any(
+                    isinstance(n, ast.Try) and n.finalbody and "teardown" in ast.unparse(ast.Module(n.finalbody, []))
+                    for n in ast.walk(tree)):
                 problems.append("teardown is not in a finally block")
         if "submission.parquet" in code and "run_smoke" not in code:
             problems.append("placeholder parquet written outside the smoke path")
