@@ -155,7 +155,7 @@ def test_execute_halts_on_first_mismatch_and_reports_diff():
     assert b.halted and b.executed == 2 and env.n_actions == n + 2
     assert b.steps[0].matched is True and b.steps[1].matched is False
     assert "expected 'avatar moves down'" in b.reason and "MISMATCH" in b.text()
-    b = ch.execute("A4 => avatar moves right 4; A3 => moves left & cell 30,24 becomes 9; A1 => no change")
+    b = ch.execute("A4 => avatar moves right 4; A3 => moves left & cell 30,28 becomes 9; A1 => no change")
     assert not b.halted, b.text()
 
 

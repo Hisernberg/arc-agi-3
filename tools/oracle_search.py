@@ -482,6 +482,100 @@ def cmd_search(args) -> None:
 
 
 # ------------------------------------------------------------------------------------------------
+# no-op share of recorded traces (frame-only, as an agent would see it)
+# ------------------------------------------------------------------------------------------------
+def trace_noops(rec: list[dict]) -> dict:
+    """Walk a recording with an online perception.HudTracker.  An action is a no-op if its settled frame
+    equals the previous one outside the HUD mask (or the only change is one edge tick).  'repeat' no-ops
+    are those where the same action was already seen to do nothing in the same masked state: a memo-style
+    no-op guard could have blocked them without any prediction."""
+    hud = P.HudTracker()
+    prev = None
+    prev_lv = None
+    st = Counter()
+    per_level: dict = defaultdict(Counter)
+    known_noop: set = set()
+    for r in rec:
+        fr = r["frame"]
+        if r["aid"] == 0 or r["aid"] is None:
+            st["reset"] += 1
+            prev, prev_lv = fr, r["lv"]
+            hud.reset_pending()
+            continue
+        if fr is None or prev is None:
+            prev, prev_lv = fr, r["lv"]
+            continue
+        lv = prev_lv or 0
+        st["actions"] += 1
+        per_level[lv]["actions"] += 1
+        kind = "click" if r["aid"] == 6 else "key"
+        st[f"{kind}_actions"] += 1
+        if r["lv"] != prev_lv or r["state"] in ("GAME_OVER", "WIN"):
+            prev, prev_lv = fr, r["lv"]
+            continue
+        hud.update(prev, fr, action_key=(r["aid"], r["x"], r["y"]))
+        m = hud.mask()
+        ch = (prev != fr) & ~m
+        noop = (not ch.any()) or hud.is_tick_only(prev, fr)
+        if noop:
+            skey = (P.masked_hash(prev, m), r["aid"], r["x"], r["y"])
+            st["noop"] += 1
+            st[f"{kind}_noop"] += 1
+            per_level[lv]["noop"] += 1
+            if skey in known_noop:
+                st["repeat_noop"] += 1
+                per_level[lv]["repeat_noop"] += 1
+            known_noop.add(skey)
+        prev, prev_lv = fr, r["lv"]
+    out = dict(st)
+    out["noop_frac"] = round(st["noop"] / max(1, st["actions"]), 3)
+    out["repeat_noop_frac"] = round(st["repeat_noop"] / max(1, st["actions"]), 3)
+    out["click_noop_frac"] = round(st["click_noop"] / max(1, st["click_actions"]), 3)
+    out["key_noop_frac"] = round(st["key_noop"] / max(1, st["key_actions"]), 3)
+    out["per_level"] = {int(k): dict(v) for k, v in sorted(per_level.items())}
+    return out
+
+
+def cmd_noop(args) -> None:
+    os.makedirs(OUT, exist_ok=True)
+    rows = []
+    for p in sorted(glob.glob(HUMAN_GLOB)):
+        rec = read_recording(p)
+        gid = next((r["game_id"] for r in rec if r["game_id"]), "?")
+        # the 5 fully reasoned wins at the repo root are frontier-model replays (reasoning field present)
+        first = json.loads(open(p).readline())
+        is_model = bool((first.get("data", first).get("action_input") or {}).get("reasoning"))
+        if not is_model:
+            with open(p) as f:
+                for i, line in enumerate(f):
+                    if i > 5:
+                        break
+                    d = json.loads(line).get("data", {})
+                    if (d.get("action_input") or {}).get("reasoning"):
+                        is_model = True
+        r = trace_noops(rec)
+        r.update({"source": "arcprize_model" if is_model else "human", "file": os.path.basename(p), "game_id": gid})
+        rows.append(r)
+        print(f"{r['source']:14s} {gid:14s} actions={r['actions']:5d} noop={r['noop_frac']:.3f} "
+              f"repeat={r['repeat_noop_frac']:.3f} click_noop={r['click_noop_frac']:.3f} key_noop={r['key_noop_frac']:.3f}",
+              flush=True)
+    for g in list_games():
+        p = astra_path(g)
+        if not p:
+            continue
+        rec = read_recording(p)
+        r = trace_noops(rec)
+        r.update({"source": "astra", "file": os.path.basename(p), "game_id": rec[0]["game_id"]})
+        rows.append(r)
+        print(f"{'astra':14s} {r['game_id']:14s} actions={r['actions']:5d} noop={r['noop_frac']:.3f} "
+              f"repeat={r['repeat_noop_frac']:.3f} click_noop={r['click_noop_frac']:.3f} key_noop={r['key_noop_frac']:.3f}",
+              flush=True)
+    with open(os.path.join(OUT, "noop_traces.jsonl"), "w") as f:
+        for r in rows:
+            f.write(json.dumps(r) + "\n")
+
+
+# ------------------------------------------------------------------------------------------------
 # CLI
 # ------------------------------------------------------------------------------------------------
 def main(argv: list[str]) -> int:

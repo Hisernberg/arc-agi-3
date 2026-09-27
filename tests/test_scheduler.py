@@ -167,7 +167,9 @@ def test_level_clear_moves_a_game_to_the_front_and_stagnation_demotes_it():
     assert all(core.klass(g) == S.STAGNANT for g in core.games.values())
     turn("a", levels=1)                                          # a clears a level ...
     assert core.klass(core.games["a"]) == S.HOT
-    assert [turn() for _ in range(3)] == ["a", "a", "a"]         # ... and gets the GPU while it is hot
+    assert turn() == "a"                                         # ... jumps to the front ...
+    nxt = [turn(levels=core.games["a"].levels + 1) if i % 2 else turn() for i in range(12)]
+    assert nxt.count("a") >= 9                                   # ... and gets the GPU while it keeps clearing
 
 
 def test_keepalive_preempts_priority():

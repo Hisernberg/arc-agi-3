@@ -442,10 +442,15 @@ class StateSet:
         return False
 
     def add(self, level: int, key: tuple, frame: Optional[np.ndarray], mask: Optional[np.ndarray] = None) -> None:
-        if frame is None or self.contains(level, key, frame):
+        if frame is None:
             return
+        f = np.asarray(frame).astype(np.int16)
         m = np.zeros((64, 64), bool) if mask is None else np.asarray(mask, bool).copy()
-        self.d.setdefault((level, key), []).append((m, np.asarray(frame).astype(np.int16).copy()))
+        lst = self.d.setdefault((level, key), [])
+        for n, g in lst:  # redundant if an entry ignoring a superset of cells already matches it
+            if not (m & ~n).any() and not ((f != g) & ~n).any():
+                return
+        lst.append((m, f.copy()))
 
     def __len__(self) -> int:
         return sum(len(v) for v in self.d.values())
