@@ -151,24 +151,24 @@ def test_level_clear_moves_a_game_to_the_front_and_stagnation_demotes_it():
     core = S.ProgressScheduler(["a", "b", "c"], cfg, now=0.0, deadline=10_000.0)
     t = 0.0
 
-    def turn(expect=None, levels=None):
+    def turn(expect=None, a_clears=False):
         nonlocal t
         core.tick(t)
         (gid,) = core.dispatch(t)
         if expect is not None:
             assert gid == expect
         t += 10.0
-        core.on_turn_end(gid, t, levels=levels if levels is not None else core.games[gid].levels)
+        core.on_turn_end(gid, t, levels=core.games[gid].levels + (1 if a_clears and gid == "a" else 0))
         return gid
 
     assert [turn() for _ in range(3)] == ["a", "b", "c"]          # first turns in gateway order
     for _ in range(6):                                           # nobody progresses -> all stagnant
         turn()
     assert all(core.klass(g) == S.STAGNANT for g in core.games.values())
-    turn("a", levels=1)                                          # a clears a level ...
+    turn("a", a_clears=True)                                     # a clears a level ...
     assert core.klass(core.games["a"]) == S.HOT
     assert turn() == "a"                                         # ... jumps to the front ...
-    nxt = [turn(levels=core.games["a"].levels + 1) if i % 2 else turn() for i in range(12)]
+    nxt = [turn(a_clears=i % 2 == 1) for i in range(12)]
     assert nxt.count("a") >= 9                                   # ... and gets the GPU while it keeps clearing
 
 
