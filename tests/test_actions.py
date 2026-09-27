@@ -45,7 +45,7 @@ class Corridor:
         g[32:34, 2:6] = 8
         g[30:32, 54:58] = 14
         g[30:32, self.pos:self.pos + 2] = 9
-        g[63, :] = 11
+        g[63, :self.budget] = 11  # the bar spans the budget, one cell per action
         g[63, :self.used] = 5
         return g
 
@@ -270,11 +270,11 @@ def test_expectations_on_a_real_game():
 
     env = ArcEnv("ls20")
     ch = ActionChannel(env)
-    # learn which cell ACTION4 changes, on a clone, then predict it
+    # learn which cell ACTION4 changes (outside the HUD rows), on a clone, then predict it
     c = env.clone()
     before = env.frame.copy()
     after = c.step(4).frame
-    r_, c_ = map(int, np.argwhere((before != after) & ~np.eye(64, dtype=bool)[0:64])[0])
+    r_, c_ = map(int, next(p for p in np.argwhere(before != after) if p[0] < 60))
     b = ch.execute([("ACTION4", f"cell {r_},{c_} becomes {int(after[r_, c_])}"),
                     ("ACTION2", "avatar moves down"), ("ACTION4", None)])
     assert b.steps[0].matched is True

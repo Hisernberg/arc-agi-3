@@ -192,3 +192,326 @@ def env_at_level(game: str, level: int, starts: dict, competition: bool = True) 
     assert env.levels_completed == level, (game, level, env.levels_completed)
     env.competition = competition
     return env
+
+
+# ------------------------------------------------------------------------------------------------
+# agent-realistic state key + action set (frame-only; uses the harness perception pack)
+# ------------------------------------------------------------------------------------------------
+def rss_mb() -> float:
+    try:
+        with open("/proc/self/statm") as f:
+            return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 2 ** 20
+    except Exception:  # pragma: no cover
+        return 0.0
+
+
+class Keyer:
+    """State key = blake2b of the settled frame with the HUD mask blanked (what an agent can hash)."""
+
+    def __init__(self, mask: Optional[np.ndarray] = None):
+        self.mask = mask if mask is not None and mask.any() else None
+
+    def key(self, frame: np.ndarray) -> bytes:
+        g = np.asarray(frame, dtype=np.int8)
+        if self.mask is not None:
+            g = g.copy()
+            g[self.mask] = -1
+        return hashlib.blake2b(g.tobytes(), digest_size=12).digest()
+
+
+class ActionSet:
+    """Keyboard actions (available_actions minus RESET/undo) + one ACTION6 per distinct object/cell
+    (perception.rank_click_candidates on a 4-connected same-colour segmentation, plus one empty-space
+    click).  Cached per masked frame."""
+
+    def __init__(self, hud_mask: Optional[np.ndarray], scale: tuple, max_clicks: int = 128):
+        self.hud_mask = hud_mask
+        self.scale = scale
+        self.max_clicks = max_clicks
+        self.cache: dict[bytes, list] = {}
+        self.n_click_cands: list[int] = []
+
+    def __call__(self, env: ArcEnv, key: bytes) -> list:
+        acts = self.cache.get(key)
+        if acts is not None:
+            return acts
+        avail = env.available_actions
+        acts = [[a] for a in avail if a in (1, 2, 3, 4, 5)]
+        if 6 in avail and env.frame is not None:
+            seg = P.segment(env.frame, hud_mask=self.hud_mask, scale=self.scale)
+            cands = P.rank_click_candidates(seg, self.hud_mask, max_n=self.max_clicks, include_bg=True)
+            acts += [[6, int(c.x), int(c.y)] for c in cands]
+            self.n_click_cands.append(len(cands))
+        if len(self.cache) < 20000:
+            self.cache[key] = acts
+        return acts
+
+
+def calibrate_hud(env: ArcEnv, n_walks: int = 6, walk_len: int = 30, seed: int = 0) -> tuple[np.ndarray, str]:
+    """Run short random walks from the level start (on clones) through perception.HudTracker and return
+    the union of the detected bar regions (the frame-only HUD/budget mask) + a description."""
+    rng = random.Random(seed)
+    mask = np.zeros((64, 64), bool)
+    descs = []
+    scale = P.detect_scale(env.frame)
+    for w in range(n_walks):
+        hud = P.HudTracker()
+        e = env.clone()
+        lv0 = e.levels_completed
+        acts_of = ActionSet(None, scale)
+        prev = e.frame.copy()
+        for t in range(walk_len):
+            acts = acts_of(e, prev.tobytes())
+            if not acts:
+                break
+            a = rng.choice(acts)
+            o = step_env(e, a)
+            if o.ignored or o.frame is None or o.levels_completed != lv0 or o.state != "NOT_FINISHED":
+                break
+            hud.update(prev, o.frame, action_key=tuple(a))
+            prev = o.frame.copy()
+        mask |= hud.mask()
+        if hud.bars:
+            descs.append(hud.describe())
+    return mask, " | ".join(sorted(set(descs)))
+
+
+# ------------------------------------------------------------------------------------------------
+# breadth-first search with exact clones
+# ------------------------------------------------------------------------------------------------
+def bfs_level(env: ArcEnv, cap_s: float = 90.0, keyer: Optional[Keyer] = None, actions: Optional[ActionSet] = None,
+              max_depth: int = 400, rss_limit_mb: float = 2500.0) -> dict:
+    """BFS from `env` (a level start) until the level is completed, the graph is exhausted or `cap_s` runs out.
+
+    Also accounts what the *same* search would cost an online explorer without clones (every tried action
+    is a real action):  lo = 1 per tried action + 1 to come back after every state-changing one (perfect
+    undo);  hi = 1 per tried action + (RESET + replay of the d-step path) after every state-changing one."""
+    t0 = time.time()
+    keyer = keyer or Keyer()
+    actions = actions or ActionSet(keyer.mask, P.detect_scale(env.frame))
+    lv0 = env.levels_completed
+    rkey = keyer.key(env.frame)
+    seen = {rkey}
+    frontier = [(env, [], rkey)]
+    st = Counter()
+    per_depth = []  # (depth, frontier size expanded, new states)
+    cost_lo = cost_hi = 0
+    beam_cut = False
+    noop_root_kept = False
+    depth_done = 0
+    for depth in range(1, max_depth + 1):
+        nxt = []
+        n_new = 0
+        for ni, (node, path, nkey) in enumerate(frontier):
+            acts = actions(node, nkey)
+            st["expanded"] += 1
+            st["cands"] += len(acts)
+            for i, a in enumerate(acts):
+                if time.time() - t0 > cap_s:
+                    per_depth.append((depth, ni, n_new))
+                    return _bfs_result("timeout", st, seen, per_depth, depth_done, cost_lo, cost_hi, beam_cut, t0,
+                                       actions)
+                c = node.clone() if i < len(acts) - 1 else node
+                o = step_env(c, a)
+                st["tried"] += 1
+                d = len(path)
+                if o.levels_completed > lv0 or o.state == "WIN":
+                    cost_lo += 1
+                    cost_hi += 1
+                    per_depth.append((depth, ni + 1, n_new))
+                    r = _bfs_result("solved", st, seen, per_depth, depth_done, cost_lo, cost_hi, beam_cut, t0, actions)
+                    r["path"] = path + [a]
+                    r["length"] = len(path) + 1
+                    return r
+                if o.ignored or o.frame is None:
+                    st["ignored"] += 1
+                    cost_lo += 1
+                    cost_hi += 1
+                    continue
+                if o.state == "GAME_OVER":
+                    st["game_over"] += 1
+                    cost_lo += 2
+                    cost_hi += 2 + d
+                    continue
+                k = keyer.key(o.frame)
+                if k == nkey:
+                    st["noop"] += 1
+                    cost_lo += 1
+                    cost_hi += 1
+                    # a first action may only flip hidden state (e.g. a tutorial demo): keep one such child
+                    if depth == 1 and not noop_root_kept:
+                        noop_root_kept = True
+                        nxt.append((c, path + [a], k))
+                    continue
+                cost_lo += 2
+                cost_hi += 2 + d
+                if k in seen:
+                    st["dup"] += 1
+                    continue
+                seen.add(k)
+                n_new += 1
+                if beam_cut:
+                    continue
+                nxt.append((c, path + [a], k))
+                if len(nxt) % 256 == 0 and rss_mb() > rss_limit_mb:
+                    beam_cut = True  # memory cap: keep what we have (result becomes an upper bound)
+        per_depth.append((depth, len(frontier), n_new))
+        depth_done = depth
+        if not nxt:
+            return _bfs_result("exhausted", st, seen, per_depth, depth_done, cost_lo, cost_hi, beam_cut, t0, actions)
+        frontier = nxt
+    return _bfs_result("max_depth", st, seen, per_depth, depth_done, cost_lo, cost_hi, beam_cut, t0, actions)
+
+
+def _bfs_result(status, st, seen, per_depth, depth_done, cost_lo, cost_hi, beam_cut, t0, actions) -> dict:
+    exp = max(1, st["expanded"])
+    tried = max(1, st["tried"])
+    new_states = len(seen) - 1
+    return {"status": status, "depth_done": depth_done, "states": len(seen), "expanded": st["expanded"],
+            "tried": st["tried"], "branch_cands": round(st["cands"] / exp, 2),
+            "branch_eff": round(new_states / exp, 2),
+            "noop_frac": round(st["noop"] / tried, 3), "dup_frac": round(st["dup"] / tried, 3),
+            "gameover_frac": round(st["game_over"] / tried, 3),
+            "online_cost_lo": cost_lo, "online_cost_hi": cost_hi, "beam_cut": beam_cut,
+            "per_depth": per_depth[-12:], "secs": round(time.time() - t0, 1),
+            "click_cands_mean": round(float(np.mean(actions.n_click_cands)), 1) if actions.n_click_cands else 0}
+
+
+# ------------------------------------------------------------------------------------------------
+# structured random play
+# ------------------------------------------------------------------------------------------------
+def random_play(env: ArcEnv, keyer: Keyer, actions: ActionSet, max_actions: int, cap_s: float, seed: int) -> dict:
+    """Uniform random choice over the candidate actions; a GAME_OVER costs a level RESET (+1) and restarts
+    from the level start.  Returns the actions spent until the level was completed (or None)."""
+    rng = random.Random(seed)
+    t0 = time.time()
+    lv0 = env.levels_completed
+    e = env.clone()
+    n = resets = 0
+    while n < max_actions and time.time() - t0 < cap_s:
+        k = keyer.key(e.frame)
+        acts = actions(e, k)
+        if not acts:
+            break
+        o = step_env(e, rng.choice(acts))
+        n += 1
+        if o.levels_completed > lv0 or o.state == "WIN":
+            return {"solved": True, "actions": n, "resets": resets}
+        if o.state == "GAME_OVER" or o.ignored:
+            e = env.clone()
+            n += 1
+            resets += 1
+    return {"solved": False, "actions": n, "resets": resets, "timed_out": time.time() - t0 >= cap_s}
+
+
+# ------------------------------------------------------------------------------------------------
+# one level = calibrate HUD mask, BFS, random play
+# ------------------------------------------------------------------------------------------------
+def run_level(task: tuple) -> dict:
+    game, level, cap_s, rand_cap_s, rand_runs, rand_max = task
+    t0 = time.time()
+    rec: dict = {"game": game, "level": level + 1}
+    try:
+        starts = load_starts()
+        env = env_at_level(game, level, starts)
+        rec["baseline"] = env.baseline[level]
+        rec["astra_actions"] = starts[game]["level_actions"][level]
+        rec["available"] = env.available_actions
+        mask, desc = calibrate_hud(env)
+        rec["hud_px"] = int(mask.sum())
+        rec["hud"] = desc
+        keyer = Keyer(mask)
+        scale = P.detect_scale(env.frame, ignore=mask if mask.any() else None)
+        rec["scale"] = list(scale)
+        acts = ActionSet(keyer.mask, scale)
+        rec["root_cands"] = len(acts(env, keyer.key(env.frame)))
+        r = bfs_level(env.clone(), cap_s=cap_s, keyer=keyer, actions=acts)
+        if r["status"] == "solved":  # verify by replay on a fresh env
+            v = env_at_level(game, level, starts)
+            for a in r["path"]:
+                o = step_env(v, a)
+            r["verified"] = v.levels_completed > level
+        rec["bfs"] = r
+        rr = []
+        for s in range(rand_runs):
+            rr.append(random_play(env, keyer, acts, rand_max, rand_cap_s / max(1, rand_runs), seed=1000 + s))
+        rec["random"] = rr
+    except Exception as ex:  # noqa: BLE001
+        import traceback
+        rec["error"] = repr(ex)[:300]
+        rec["trace"] = traceback.format_exc()[-1500:]
+    rec["secs"] = round(time.time() - t0, 1)
+    rec["rss_mb"] = round(rss_mb())
+    return rec
+
+
+def cmd_search(args) -> None:
+    os.makedirs(OUT, exist_ok=True)
+    starts = load_starts()
+    games = args.games.split(",") if args.games else sorted(starts)
+    levels = [int(x) for x in args.levels.split(",")] if args.levels else None
+    out_p = os.path.join(OUT, f"search_{args.tag}.jsonl")
+    done = set()
+    if os.path.exists(out_p):
+        for r in map(json.loads, open(out_p)):
+            if "error" not in r:
+                done.add((r["game"], r["level"]))
+    tasks = []
+    for g in games:
+        for lv in range(starts[g]["n_levels"]):
+            if levels and lv + 1 not in levels:
+                continue
+            if (g, lv + 1) in done or str(lv) not in starts[g]["starts"]:
+                continue
+            tasks.append((g, lv, args.cap, args.rand_cap, args.rand_runs, args.rand_max))
+    # interleave games so that slow games spread over the workers
+    tasks.sort(key=lambda t: (t[1], t[0]))
+    print(f"{len(tasks)} level tasks -> {out_p}", flush=True)
+    ctx = mp.get_context("fork")
+    with ctx.Pool(args.workers, maxtasksperchild=1) as pool, open(out_p, "a") as f:
+        for rec in pool.imap_unordered(run_level, tasks):
+            f.write(json.dumps(rec) + "\n")
+            f.flush()
+            b = rec.get("bfs", {})
+            rs = rec.get("random", [])
+            print(f"{rec['game']} L{rec['level']}: {b.get('status', rec.get('error'))} len={b.get('length')} "
+                  f"base={rec.get('baseline')} depth={b.get('depth_done')} states={b.get('states')} "
+                  f"br={b.get('branch_cands')}/{b.get('branch_eff')} cost={b.get('online_cost_lo')}-{b.get('online_cost_hi')} "
+                  f"hud={rec.get('hud_px')} rand={sum(x['solved'] for x in rs)}/{len(rs)} ({rec['secs']}s, {rec.get('rss_mb')}MB)",
+                  flush=True)
+
+
+# ------------------------------------------------------------------------------------------------
+# CLI
+# ------------------------------------------------------------------------------------------------
+def main(argv: list[str]) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    s = sub.add_parser("starts")
+    s.add_argument("--games", default="")
+    s = sub.add_parser("search")
+    s.add_argument("--games", default="")
+    s.add_argument("--levels", default="")
+    s.add_argument("--cap", type=float, default=90.0, help="BFS seconds per level")
+    s.add_argument("--rand-cap", type=float, default=20.0, help="random-play seconds per level (all runs)")
+    s.add_argument("--rand-runs", type=int, default=5)
+    s.add_argument("--rand-max", type=int, default=1500, help="max actions per random run")
+    s.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2)))
+    s.add_argument("--tag", default="main")
+    s = sub.add_parser("noop")
+    s = sub.add_parser("report")
+    s.add_argument("--tag", default="main")
+    args = ap.parse_args(argv)
+    if args.cmd == "starts":
+        cmd_starts(args)
+    elif args.cmd == "search":
+        cmd_search(args)
+    elif args.cmd == "noop":
+        cmd_noop(args)
+    elif args.cmd == "report":
+        cmd_report(args)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

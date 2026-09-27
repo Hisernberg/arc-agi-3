@@ -38,7 +38,7 @@ except ImportError:  # pragma: no cover
                             to_grid)
 
 __all__ = ["Observation", "normalize_obs", "Expectation", "parse_expectation", "parse_plan", "StepResult",
-           "BatchResult", "ActionChannel"]
+           "BatchResult", "StateSet", "ActionChannel"]
 
 _DIR_ALIASES = {"up": (0, -1), "u": (0, -1), "north": (0, -1), "down": (0, 1), "d": (0, 1), "south": (0, 1),
                 "left": (-1, 0), "l": (-1, 0), "west": (-1, 0), "right": (1, 0), "r": (1, 0), "east": (1, 0)}
@@ -424,6 +424,33 @@ class Attempt:
     budget_death: bool = False  # ended in GAME_OVER with the timer/budget bar (nearly) empty
 
 
+class StateSet:
+    """Remembered (level, action key) -> frames, each with the mask of cells to ignore when comparing
+    (HUD/timer cells, and for no-ops the tick cells that step flipped). Membership = equal outside the
+    stored mask, so a memory stays valid whatever the HUD tracker learns later."""
+
+    def __init__(self):
+        self.d: dict[tuple, list[tuple[np.ndarray, np.ndarray]]] = {}
+
+    def contains(self, level: int, key: tuple, frame: Optional[np.ndarray]) -> bool:
+        if frame is None:
+            return False
+        f = np.asarray(frame)
+        for m, g in self.d.get((level, key), ()):
+            if not ((f != g) & ~m).any():
+                return True
+        return False
+
+    def add(self, level: int, key: tuple, frame: Optional[np.ndarray], mask: Optional[np.ndarray] = None) -> None:
+        if frame is None or self.contains(level, key, frame):
+            return
+        m = np.zeros((64, 64), bool) if mask is None else np.asarray(mask, bool).copy()
+        self.d.setdefault((level, key), []).append((m, np.asarray(frame).astype(np.int16).copy()))
+
+    def __len__(self) -> int:
+        return sum(len(v) for v in self.d.values())
+
+
 # ------------------------------------------------------------------------------------------------
 # the channel
 # ------------------------------------------------------------------------------------------------
@@ -465,9 +492,9 @@ class ActionChannel:
         self.resets = 0
         self.blocked_count: Counter = Counter()
         # memories
-        self.noop_mem: Counter = Counter()  # (level, hash, key) -> times seen with no effect
-        self.anim_noop_mem: Counter = Counter()
-        self.death_mem: set = set()
+        self.noops = StateSet()  # single-frame no-ops
+        self.anim_noops = StateSet()  # animated steps that ended where they started (not blocked by default)
+        self.deaths = StateSet()  # (state, action) -> GAME_OVER
         self.ok_mem: set = set()  # (level, masked hash, key) executed without GAME_OVER
         self.attempt = Attempt(self.level, self._frame_copy())
         self.attempts: dict[int, list[Attempt]] = {}  # level -> closed attempts
@@ -559,14 +586,13 @@ class ActionChannel:
             return f"{self.state}: only RESET is accepted"
         if self.guard_unavailable and self.obs.available_actions and aid not in self.obs.available_actions:
             return f"ACTION{aid} not available {self.obs.available_actions}"
-        h = self._hash()
-        he = self._exact_hash()
+        f = self.obs.frame
         for k in self.action_keys(a):
-            mk = (self.level, h, k)
-            if self.guard_deaths and (mk in self.death_mem or (self.level, he, k) in self.death_mem):
+            if self.guard_deaths and self.deaths.contains(self.level, k, f):
                 return "known GAME_OVER transition"
             if self.guard_noops and aid not in self.noop_exempt and (
-                    self.noop_mem[mk] >= 1 or (self.block_animated_noops and self.anim_noop_mem[mk] >= 2)):
+                    self.noops.contains(self.level, k, f) or
+                    (self.block_animated_noops and self.anim_noops.contains(self.level, k, f))):
                 return "known no-op here"
         return None
 
@@ -650,22 +676,22 @@ class ActionChannel:
             # Exact (unmasked) key always. The HUD-masked key only when the death is (a) not plausibly
             # budget exhaustion (with the timer masked, a budget death would ban a harmless action) and
             # (b) not history-dependent: the same visible (state, action) never survived before.
-            he = "x" + masked_hash(prev_obs.frame, None, lvl) if prev_obs.frame is not None else "none"
             budget = self._budget_nearly_out(prev_obs.frame)
             for k in keys:
-                self.death_mem.add((lvl, he, k))
+                self.deaths.add(lvl, k, prev_obs.frame)  # exact
                 if not budget and (lvl, h_before, k) not in self.ok_mem:
-                    self.death_mem.add((lvl, h_before, k))
+                    self.deaths.add(lvl, k, prev_obs.frame, self.P.hud_mask())
             self.attempt.budget_death = budget
             self._close_attempt("game_over")
             self.attempt = Attempt(lvl, self._frame_copy())  # placeholder until the RESET
             return
         for k in keys:
             self.ok_mem.add((lvl, h_before, k))
-        if pc.noop:
-            mem = self.noop_mem if len(obs.frames) <= 1 else self.anim_noop_mem
+        if pc.noop and prev_obs.frame is not None and obs.frame is not None:
+            mem = self.noops if len(obs.frames) <= 1 else self.anim_noops
+            ign = self.P.hud_mask() | (np.asarray(prev_obs.frame) != np.asarray(obs.frame))
             for k in keys:
-                mem[(lvl, h_before, k)] += 1
+                mem.add(lvl, k, prev_obs.frame, ign)
 
     def _close_attempt(self, end: str) -> None:
         at = self.attempt
