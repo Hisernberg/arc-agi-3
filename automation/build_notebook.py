@@ -66,10 +66,13 @@ def load_profile(name: str) -> dict[str, Any]:
     """Read serving/profiles/<name>.json through serving/launch.py's own loader (schema check); read-only use."""
     launch = REPO / "serving" / "launch.py"
     if launch.is_file():
-        spec = importlib.util.spec_from_file_location("hydra_serving_launch", launch)
-        module = importlib.util.module_from_spec(spec)
-        assert spec and spec.loader
-        spec.loader.exec_module(module)
+        module = sys.modules.get("hydra_serving_launch")
+        if module is None:
+            spec = importlib.util.spec_from_file_location("hydra_serving_launch", launch)
+            assert spec and spec.loader
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["hydra_serving_launch"] = module  # dataclasses resolve annotations through sys.modules
+            spec.loader.exec_module(module)
         return module.load_profile(name)
     return json.loads((REPO / "serving" / "profiles" / f"{name}.json").read_text())
 
