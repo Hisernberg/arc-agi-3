@@ -686,10 +686,13 @@ class HttpClient:
 class UrllibClient(HttpClient):
     name = "urllib-threads"
 
-    def __init__(self, base_url: str):
+    def __init__(self, base_url: str, max_workers: int = 96):
         import urllib.request
+        from concurrent.futures import ThreadPoolExecutor
         handlers = [urllib.request.ProxyHandler({})] if _is_loopback(base_url) else []
         self._opener = urllib.request.build_opener(*handlers)
+        # own pool: asyncio.run() would otherwise block on in-flight requests when the window closes
+        self._pool = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="bench-http")
 
     def _post(self, url: str, payload: dict[str, Any], timeout: float) -> tuple[int, Any, str]:
         import urllib.error
@@ -717,10 +720,13 @@ class UrllibClient(HttpClient):
             return exc.code, ""
 
     async def post_json(self, url, payload, timeout):
-        return await asyncio.to_thread(self._post, url, payload, timeout)
+        return await asyncio.get_running_loop().run_in_executor(self._pool, self._post, url, payload, timeout)
 
     async def get_text(self, url, timeout):
-        return await asyncio.to_thread(self._get, url, timeout)
+        return await asyncio.get_running_loop().run_in_executor(self._pool, self._get, url, timeout)
+
+    async def close(self) -> None:
+        self._pool.shutdown(wait=False, cancel_futures=True)
 
 
 class AiohttpClient(HttpClient):

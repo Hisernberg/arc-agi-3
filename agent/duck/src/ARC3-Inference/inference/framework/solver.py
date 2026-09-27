@@ -23,6 +23,7 @@ import arcengine
 import taaf.game
 from taaf.solver import Solver
 
+from inference.agent import patches
 from inference.agent.action_names import (
     to_engine_action,
     to_model_action,
@@ -224,6 +225,28 @@ class _HarnessGameSession:
             remaining = max(0.0, self.solver.max_runtime_s_per_game - elapsed)
         return {"run_elapsed_seconds": elapsed, "time_remaining_seconds": remaining}
 
+    def game_status(self) -> dict[str, Any]:
+        """[DUCK-PATCH P1/M2] game clock + level bookkeeping handed to the analyzer each turn
+        (per-turn pacing line, verified-facts level history). ``time_remaining_seconds`` is the
+        sooner of the per-game budget and the run's soft deadline; ``baseline_actions`` is None
+        when the environment hides baselines (submission mode)."""
+        timing = self.timing_payload()
+        remaining = timing["time_remaining_seconds"]
+        soft_remaining = self.solver.soft_time_remaining_seconds()
+        if soft_remaining is not None:
+            remaining = soft_remaining if remaining is None else min(remaining, soft_remaining)
+        run = self.game.game_run
+        baselines = getattr(self.game, "base_actions_per_level", None)
+        return {
+            "elapsed_seconds": timing["run_elapsed_seconds"],
+            "time_remaining_seconds": remaining,
+            "levels_completed": int(self.game.current_state.levels_completed),
+            "number_of_levels": int(self.game.number_of_levels),
+            "actions_per_level": list(run.actions_per_level) if run is not None else [],
+            "baseline_actions": list(baselines) if baselines else None,
+            "action_count": self.action_count,
+        }
+
     def request_timeout_seconds(self) -> float | None:
         candidates: list[float] = []
         configured = getattr(self.analyzer, "_timeout", None)
@@ -288,6 +311,11 @@ class _HarnessGameSession:
                     analysis_step = retry_analysis_step
 
                 self.write_runtime_state()
+                if (
+                    patches.enabled("P1_SCORING") or patches.enabled("M2_FACTS")
+                ) and hasattr(self.analyzer, "set_game_status"):
+                    # [DUCK-PATCH P1/M2] per-turn game clock and level history for the prompt.
+                    self.analyzer.set_game_status(self.state_path, self.game_status())
                 transcript_before = self._read_transcript_bytes()
                 try:
                     result = self.analyzer.analyze(

@@ -1000,7 +1000,8 @@ def rank_click_candidates(seg: Segmentation, hud_mask: Optional[np.ndarray] = No
                           dead: Optional[Counter] = None, live: Optional[Counter] = None,
                           max_n: int = 64, include_bg: bool = True,
                           live_shapes: Optional[Counter] = None,
-                          dead_inst: Optional[Counter] = None) -> list[ClickCandidate]:
+                          dead_inst: Optional[Counter] = None,
+                          live_pos: Optional[dict] = None) -> list[ClickCandidate]:
     """One ACTION6 candidate per non-background object (deduplicated per grid cell).
 
     Prior score per object (generic, not tuned per game): size in grid cells (1-64 cells best; sub-cell
@@ -1077,8 +1078,31 @@ def rank_click_candidates(seg: Segmentation, hud_mask: Optional[np.ndarray] = No
                 sc += 1.5
         scored.append((sc, c, status))
     scored.sort(key=lambda t: (-t[0], t[1].r0, t[1].c0))
+    live_pos = live_pos or {}
+    by_type: dict[str, list] = {}
+    for item in scored:
+        by_type.setdefault(item[1].ctype, []).append(item)
+    order_idx: dict[int, int] = {}
+    for ct, items in by_type.items():
+        if len(items) == 1:
+            order_idx[items[0][1].id] = 0
+            continue
+        pts = live_pos.get(ct)
+        if pts:
+            items = sorted(items, key=lambda t: (min(abs(t[1].cy - py) + abs(t[1].cx - px) for py, px in pts),
+                                                 -t[0], t[1].r0, t[1].c0))
+        else:  # farthest-point order, starting from the best-scored instance
+            chosen = [items[0]]
+            rest = items[1:]
+            while rest and len(chosen) < 32:
+                far = max(rest, key=lambda t: (min(abs(t[1].cy - q[1].cy) + abs(t[1].cx - q[1].cx) for q in chosen),
+                                               t[0], -t[1].r0, -t[1].c0))
+                chosen.append(far)
+                rest.remove(far)
+            items = chosen + rest
+        for i, t in enumerate(items):
+            order_idx[t[1].id] = i
     seen_cells: set = set()
-    inst: Counter = Counter()
     cands: list[tuple[tuple, ClickCandidate]] = []
     for sc, c, status in scored:
         x, y = click_point(c, seg)
@@ -1086,8 +1110,7 @@ def rank_click_candidates(seg: Segmentation, hud_mask: Optional[np.ndarray] = No
         if cellkey in seen_cells:
             continue
         seen_cells.add(cellkey)
-        i = inst[c.ctype]
-        inst[c.ctype] += 1
+        i = order_idx[c.id]
         adj = sc - (0.05 if status == "live" else 0.9) * i
         srank = {"live": 0, "untested": 1, "dead": 2}[status]
         cands.append(((srank, -adj, c.r0, c.c0), ClickCandidate(x, y, c, c.ctype, type_count[c.ctype], round(adj, 3), status)))
@@ -1214,6 +1237,7 @@ class Perceiver:
         self.live: Counter = Counter()
         self.live_shapes: Counter = Counter()
         self.dead_inst: Counter = Counter()  # (type, r0, c0) of clicked instances that did nothing (per level)
+        self.live_pos: dict[str, list] = {}  # type -> [(cy, cx)] of clicks that changed something (per level)
         self.level: Any = None
         self._edges_h = np.zeros(W, np.int64)
         self._edges_v = np.zeros(H, np.int64)
@@ -1280,6 +1304,7 @@ class Perceiver:
         h_before = self.state_hash(p)
         if level_changed:
             self.dead_inst.clear()
+            self.live_pos.clear()
             for k in list(self.dead):
                 self.dead[k] = min(self.dead[k], 1)
         if level_changed or aid == 0:
@@ -1319,6 +1344,7 @@ class Perceiver:
                 self.live[key] += 1
                 if clicked is not None and not clicked.bg:
                     self.live_shapes[clicked.shape] += 1
+                    self.live_pos.setdefault(key, []).append((clicked.cy, clicked.cx))
         av = set(self.avatar.avatars())
         pc = Percept((aid, x, y), d, events, animation_summary(p, fr, mask), noop, False, state, clicked,
                      [e for e in events if e.kind == "moved" and e.color in av],
@@ -1330,7 +1356,8 @@ class Perceiver:
     # -- outputs ----------------------------------------------------------------------------
     def candidates(self, frame: Any, max_n: int = 64) -> list[ClickCandidate]:
         return rank_click_candidates(self.seg(frame), self.hud.mask(), self.dead, self.live, max_n,
-                                     live_shapes=self.live_shapes, dead_inst=self.dead_inst)
+                                     live_shapes=self.live_shapes, dead_inst=self.dead_inst,
+                                     live_pos=self.live_pos)
 
     def avatar_text(self, frame: Any, controls: bool = True) -> str:
         groups = self.avatar.groups(self.seg(frame))

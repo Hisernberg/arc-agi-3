@@ -20,7 +20,8 @@ Usage (python 3.12 venv with arc_agi 0.9.8 + arcengine 0.9.3, scipy, imageio, ma
     SCRATCH/venv/bin/python agent/duck_offline.py --games ls20,ft09 --steps 30 --profile shipped
     SCRATCH/venv/bin/python agent/duck_offline.py --compare-profiles    # token baseline, all profiles
 
-Profiles (source patches, see agent/duck/PATCHES.md): `patched` (all fixes on, default), `shipped`
+Profiles (source patches, see agent/duck/PATCHES.md): `patched` (every default: B01 fixes + prompt v9
+P1-P3), `v9` (patched + M1 retained reasoning + M2 verified facts), `pre_v9` (B01 fixes only), `shipped`
 (the 09-22 notebook's AGENTFIX set: F1+F3), `stock` (DUCK_PATCHES=0: the bundle byte-for-byte).
 
 Importing this module sets the shipped analyzer environment (setdefault) BEFORE the Duck modules are
@@ -137,14 +138,20 @@ PUBLIC_GAME_IDS: tuple[str, ...] = (
     "re86-8af5384d", "s5i5-18d95033", "sb26-7fbdac44", "su15-1944f8ab", "tr87-cd924810",
 )
 
-# Source-patch profiles (agent/duck/PATCHES.md).
+# Source-patch profiles (agent/duck/PATCHES.md). `patched` = every default (B01 fixes + prompt v9
+# P1-P3; M1/M2 default off), `v9` = patched + M1 retained reasoning + M2 verified facts/compaction,
+# `pre_v9` = the B01 patch set only (== the code before B06/B07, pinned by tests/golden).
 PROFILES: dict[str, dict[str, str]] = {
     "patched": {"DUCK_PATCHES": "1"},
-    "shipped": {"DUCK_PATCHES": "1", "DUCK_PATCH_F2_RESULT": "0", "DUCK_PATCH_S1_STATE_KEY": "0"},
+    "v9": {"DUCK_PATCHES": "1", "DUCK_PATCH_M1_THINK": "1", "DUCK_PATCH_M2_FACTS": "1"},
+    "pre_v9": {"DUCK_PATCHES": "1", "DUCK_PATCHES_V9": "0"},
+    "shipped": {"DUCK_PATCHES": "1", "DUCK_PATCHES_V9": "0", "DUCK_PATCH_F2_RESULT": "0",
+                "DUCK_PATCH_S1_STATE_KEY": "0"},
     "stock": {"DUCK_PATCHES": "0"},
 }
 _PATCH_ENV_KEYS = ("DUCK_PATCHES", "DUCK_PATCH_F1_IMAGES", "DUCK_PATCH_F2_RESULT", "DUCK_PATCH_F3_MEMORY",
-                   "DUCK_PATCH_S1_STATE_KEY")
+                   "DUCK_PATCH_S1_STATE_KEY", "DUCK_PATCHES_V9", "DUCK_PATCH_P1_SCORING", "DUCK_PATCH_P2_UNDO",
+                   "DUCK_PATCH_P3_DISCIPLINE", "DUCK_PATCH_M1_THINK", "DUCK_PATCH_M2_FACTS")
 
 DEFAULT_GAMES = ("ls20", "vc33", "ar25")  # keyboard / click / keyboard+click with ACTION7
 CHARS_PER_TOKEN = 3.5
@@ -273,8 +280,8 @@ class NetworkGuard:
 # --------------------------------------------------------------------------------------------------
 
 # Runs inside the Duck python sandbox (restricted builtins, no hashlib): a frame fingerprint and a
-# valid-action picker that only uses names the harness can map (ACTION7 is advertised but unmappable
-# in the shipped action_names.py, so it is exercised separately by the `advertised_unmappable` step).
+# valid-action picker over the six basic names. ACTION7 is exercised separately by the
+# `advertised_unmappable` step: unmappable in the shipped action_names.py, executed as UNDO with P2.
 _PRELUDE = '''
 def _fp(frame):
     h = 0
