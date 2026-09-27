@@ -122,9 +122,12 @@ def test_stock_taaf_cuts_the_last_wave_short_and_the_scheduler_does_not():
             return statistics.fmean(res.per_game[g]["service_s"] for g in gids)
 
         head_ids, tail_ids = ids[:-tail], ids[-tail:]
+        fair = SLOTS * WINDOW / N_GAMES
         assert svc(stock, tail_ids) < 0.65 * 7920.0              # the last wave loses > 1/3 of its budget
         assert svc(stock, tail_ids) < 0.7 * svc(stock, head_ids)
-        assert svc(ours, tail_ids) >= 0.85 * svc(ours, head_ids)  # no tail penalty
+        assert svc(ours, tail_ids) >= 0.75 * svc(ours, head_ids)  # no cut-off tail ...
+        assert svc(ours, tail_ids) >= 0.8 * fair                  # ... close to an equal share
+        assert svc(ours, tail_ids) >= 1.3 * svc(stock, tail_ids)
         assert ours.started == N_GAMES
         assert ours.levels > stock.levels
 

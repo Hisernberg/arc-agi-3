@@ -38,7 +38,7 @@ import numpy as np
 __all__ = [
     "to_grid", "to_frames", "norm_action", "action_label", "frame_delta", "delta_text", "Delta",
     "detect_scale", "Comp", "Segmentation", "segment", "ObjEvent", "object_diff", "HudTracker",
-    "AvatarTracker", "ClickCandidate", "rank_click_candidates", "candidates_text", "animation_summary",
+    "AvatarTracker", "ClickCandidate", "rank_click_candidates", "candidates_text", "shown_types", "animation_summary",
     "Percept", "Perceiver", "describe", "masked_hash", "approx_tokens", "click_point", "DIR_NAMES",
 ]
 
@@ -657,9 +657,11 @@ class HudTracker:
     tick   = an 8-connected blob of changed cells with a single (a -> b) transition, <= ``max_tick`` cells,
              a filled rectangle of thickness <= 3, isolated (no other change within 2 cells) and not
              accompanied by the reverse transition on its own line (that is a thin object moving).
-    bar    = confirmed by two ticks from steps with *different actions* (a timer ticks whatever the action;
-             the trailing edge of a moving, clipped line does not) with the same transition on the same
-             line band that touch each other (no gap), or at once by a tick on the outermost frame
+    chain  = ticks from different steps with the same transition on the same line band, each touching
+             the previous ones (no gap).
+    bar    = a chain of 2 ticks caused by *different actions* (a timer ticks whatever the action; the
+             trailing edge of a moving, clipped line only under one action), or of 3 ticks from any
+             actions (bars that only some actions consume), or at once a tick on the outermost frame
              row/column when that whole line holds only the two bar colours.
     region = band x the contiguous run of bar-coloured cells through the ticks (sticky, only grows).
     decay  = a bar that has not ticked during the last ``decay`` (edge bars) / ``decay_pair`` (other bars)
@@ -670,7 +672,7 @@ class HudTracker:
         self.decay = decay
         self.decay_pair = decay_pair
         self.bars: list[HudBar] = []
-        self.pending: list[tuple[int, tuple, Any]] = []  # (step, blob, action key) unconfirmed ticks
+        self.chains: list[dict] = []  # unconfirmed contiguous tick chains
         self.step = 0
         self._mask = np.zeros((H, W), bool)
 
@@ -678,7 +680,7 @@ class HudTracker:
         return self._mask
 
     def reset_pending(self) -> None:
-        self.pending = []
+        self.chains = []
 
     def update(self, prev: np.ndarray, cur: np.ndarray, action_key: Any = None) -> list[tuple]:
         """Feed one settled transition (prev -> cur) and the key of the action that caused it (None = treat
@@ -687,31 +689,29 @@ class HudTracker:
         if not ch.any():
             return []
         self.step += 1
-        used, new_pending = [], []
+        used = []
+        key = object() if action_key is None else action_key
         for bl in self._tick_blobs(prev, cur, ch):
             a, b, r0, c0, r1, c1 = bl
             bar = self._bar_for(bl)
             if bar is None:
-                partner = self._pending_partner(bl, action_key)
-                if partner is not None:
-                    bar = self._make_bar(partner, bl)
-                    self.bars.append(bar)
-                else:
+                bar = self._grow_chain(bl, key, ch)
+                if bar is None:
                     axis = self._edge_axis(bl, cur)
                     if axis is not None:
                         lo, hi = (r0, r1) if axis == "h" else (c0, c1)
                         st, en = (c0, c1) if axis == "h" else (r0, r1)
                         bar = HudBar(a, b, axis, lo, hi, st, en, edge=True)
-                        self.bars.append(bar)
+                if bar is not None:
+                    self.bars.append(bar)
             if bar is None:
-                new_pending.append((self.step, bl, action_key))
                 continue
             bar.ticks += 1
             bar.last_step = self.step
             bar.tick_px = max(bar.tick_px, (r1 - r0 + 1) * (c1 - c0 + 1))
             self._extend(bar, cur, (r0, c0, r1, c1))
             used.append(bl)
-        self.pending = (self.pending + new_pending)[-32:]
+        self.chains = self.chains[-32:]
         self.bars = [br for br in self.bars
                      if self.step - br.last_step <= (self.decay if br.edge else self.decay_pair)]
         self._rebuild()
@@ -791,29 +791,38 @@ class HudTracker:
                 return bar
         return None
 
-    def _pending_partner(self, bl, action_key: Any = None):
+    def _grow_chain(self, bl, key, changed: np.ndarray) -> Optional[HudBar]:
+        """Attach a tick to a touching chain (or start one); return a bar once the chain qualifies.
+        A tick only extends a chain if nothing else changed on the band line in this step (a bar's line
+        changes only at its tick; a moving clipped object also changes elsewhere on its line)."""
         a, b, r0, c0, r1, c1 = bl
-        for item in reversed(self.pending):
-            st, p, ak = item
-            if st == self.step or (p[0], p[1]) != (a, b):
+        tick_n = (r1 - r0 + 1) * (c1 - c0 + 1)
+        row_only = int(changed[r0:r1 + 1, :].sum()) == tick_n
+        col_only = int(changed[:, c0:c1 + 1].sum()) == tick_n
+        for ch in reversed(self.chains):
+            if ch["step"] == self.step or (ch["a"], ch["b"]) != (a, b):
                 continue
-            if action_key is not None and ak == action_key:
+            axis = ch["axis"]
+            if axis in (None, "h") and row_only and (ch["r0"], ch["r1"]) == (r0, r1) and \
+                    (c0 == ch["c1"] + 1 or c1 == ch["c0"] - 1):
+                axis = "h"
+            elif axis in (None, "v") and col_only and (ch["c0"], ch["c1"]) == (c0, c1) and \
+                    (r0 == ch["r1"] + 1 or r1 == ch["r0"] - 1):
+                axis = "v"
+            else:
                 continue
-            _, _, q0, d0, q1, d1 = p
-            if (q0, q1) == (r0, r1) and (c0 == d1 + 1 or c1 == d0 - 1):
-                self.pending.remove(item)
-                return p
-            if (d0, d1) == (c0, c1) and (r0 == q1 + 1 or r1 == q0 - 1):
-                self.pending.remove(item)
-                return p
+            ch.update(axis=axis, r0=min(ch["r0"], r0), c0=min(ch["c0"], c0), r1=max(ch["r1"], r1),
+                      c1=max(ch["c1"], c1), n=ch["n"] + 1, step=self.step)
+            ch["keys"].add(key)
+            if (ch["n"] >= 2 and len(ch["keys"]) >= 2) or ch["n"] >= 3:
+                self.chains.remove(ch)
+                if axis == "h":
+                    return HudBar(a, b, "h", ch["r0"], ch["r1"], ch["c0"], ch["c1"])
+                return HudBar(a, b, "v", ch["c0"], ch["c1"], ch["r0"], ch["r1"])
+            return None
+        self.chains.append({"a": a, "b": b, "axis": None, "r0": r0, "c0": c0, "r1": r1, "c1": c1, "n": 1,
+                            "keys": {key}, "step": self.step})
         return None
-
-    def _make_bar(self, p, bl) -> HudBar:
-        a, b, r0, c0, r1, c1 = bl
-        _, _, q0, d0, q1, d1 = p
-        if (q0, q1) == (r0, r1):
-            return HudBar(a, b, "h", r0, r1, min(c0, d0), max(c1, d1), 1)
-        return HudBar(a, b, "v", c0, c1, min(r0, q0), max(r1, q1), 1)
 
     def _edge_axis(self, bl, cur) -> Optional[str]:
         a, b, r0, c0, r1, c1 = bl
@@ -1027,7 +1036,7 @@ def _fg_contact(seg: Segmentation) -> np.ndarray:
 
 def rank_click_candidates(seg: Segmentation, hud_mask: Optional[np.ndarray] = None,
                           dead: Optional[Counter] = None, live: Optional[Counter] = None,
-                          max_n: int = 64, include_bg: bool = True,
+                          max_n: int = 128, include_bg: bool = True,
                           live_shapes: Optional[Counter] = None,
                           dead_inst: Optional[Counter] = None,
                           live_pos: Optional[dict] = None) -> list[ClickCandidate]:
@@ -1038,7 +1047,7 @@ def rank_click_candidates(seg: Segmentation, hud_mask: Optional[np.ndarray] = No
     tiles/buttons are good; masses of 1-cell specks are texture), compactness, background colour (holes)
     and frame-edge contact (borders) are penalised, and tiny pieces packed inside a multi-colour
     composite are penalised. History: types whose clicks changed something (``live``) come first with
-    all their instances, same-shape objects of another colour get a boost (``live_shapes``: toggles often
+    all their instances; same-shape objects of another colour get a boost (``live_shapes``: toggles often
     recolour). A clicked instance that did nothing (``dead_inst``, keyed (type, r0, c0)) sinks at once;
     its whole type sinks after max(2, m/3) dead clicks (one if it has a single instance), unless it
     was ever live - the same type can play different roles (reference picture vs board). Instances of a
@@ -1141,8 +1150,8 @@ def rank_click_candidates(seg: Segmentation, hud_mask: Optional[np.ndarray] = No
         seen_cells.add(cellkey)
         i = order_idx[c.id]
         adj = sc - (0.05 if status == "live" else 0.9) * i
-        srank = {"live": 0, "untested": 1, "dead": 2}[status]
-        cands.append(((srank, -adj, c.r0, c.c0), ClickCandidate(x, y, c, c.ctype, type_count[c.ctype], round(adj, 3), status)))
+        tier = {"live": 0, "untested": 1, "dead": 2}[status]
+        cands.append(((tier, -adj, c.r0, c.c0), ClickCandidate(x, y, c, c.ctype, type_count[c.ctype], round(adj, 3), status)))
     cands.sort(key=lambda t: t[0])
     ordered = [k for _, k in cands]
     type_rank: dict[str, int] = {}
@@ -1166,20 +1175,41 @@ def rank_click_candidates(seg: Segmentation, hud_mask: Optional[np.ndarray] = No
     return ordered[:max_n]
 
 
-def candidates_text(cands: list[ClickCandidate], k: int = 6, max_pos: int = 3) -> str:
-    """Candidates grouped by type, best first: ``c11 3x3 x8 @(36,36)(44,36)(52,36)..; c14 8x8 @(4,29)``.
-    ``+`` = clicks on this type changed something before, ``-`` = they did nothing."""
+def shown_types(cands: list[ClickCandidate], k_live: int = 4, k_new: int = 4) -> list[str]:
+    """Types shown to the LLM: up to ``k_live`` live types then up to ``k_new`` untested types (slots
+    are reserved so a flood of live types cannot hide a never-tried object), in candidate order."""
+    live, new = [], []
+    for cd in cands:
+        if cd.ctype.startswith("bg:") or cd.ctype in live or cd.ctype in new:
+            continue
+        if cd.status == "live" and len(live) < k_live:
+            live.append(cd.ctype)
+        elif cd.status == "untested" and len(new) < k_new:
+            new.append(cd.ctype)
+    return live + new
+
+
+def candidates_text(cands: list[ClickCandidate], k_live: int = 4, k_new: int = 4, max_pos: int = 3) -> str:
+    """Candidates grouped by type: ``c11 3x3+ x8 @(36,36)(44,36)(52,36)..; c14 8x8 @(4,29)``.
+    ``+`` = clicking this type changed something before; unmarked = untested. Dead types are only counted."""
     groups: dict[str, list[ClickCandidate]] = {}
     for cd in cands:
         if not cd.ctype.startswith("bg:"):
             groups.setdefault(cd.ctype, []).append(cd)
     parts = []
-    for ct, lst in list(groups.items())[:k]:
+    for ct in shown_types(cands, k_live, k_new):
+        lst = groups[ct]
         c = lst[0].comp
-        st = {"live": "+", "dead": "-", "untested": ""}[lst[0].status]
+        st = "+" if lst[0].status == "live" else ""
         pos = "".join(f"({q.x},{q.y})" for q in lst[:max_pos]) + (".." if len(lst) > max_pos else "")
         mult = f" x{lst[0].count}" if lst[0].count > 1 else ""
         parts.append(f"c{c.color} {c.w}x{c.h}{st}{mult} @{pos}")
+    n_dead = sum(1 for lst in groups.values() if lst[0].status == "dead")
+    bgl = [cd for cd in cands if cd.ctype.startswith("bg:")]
+    if bgl and bgl[0].status == "live":
+        parts.append(f"empty space+ e.g. ({bgl[0].x},{bgl[0].y})")
+    if n_dead:
+        parts.append(f"{n_dead} types did nothing")
     return "; ".join(parts)
 
 
@@ -1383,7 +1413,7 @@ class Perceiver:
         return pc
 
     # -- outputs ----------------------------------------------------------------------------
-    def candidates(self, frame: Any, max_n: int = 64) -> list[ClickCandidate]:
+    def candidates(self, frame: Any, max_n: int = 128) -> list[ClickCandidate]:
         return rank_click_candidates(self.seg(frame), self.hud.mask(), self.dead, self.live, max_n,
                                      live_shapes=self.live_shapes, dead_inst=self.dead_inst,
                                      live_pos=self.live_pos)
@@ -1413,7 +1443,7 @@ class Perceiver:
         at = self.avatar_text(frame)
         if at:
             out.append(at)
-        ct = candidates_text(self.candidates(frame), k=k)
+        ct = candidates_text(self.candidates(frame))
         if ct:
             out.append("click targets: " + ct)
         return "\n".join(out)

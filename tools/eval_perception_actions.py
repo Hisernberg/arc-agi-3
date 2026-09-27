@@ -121,7 +121,7 @@ def replay_click_ranks(rep: dict) -> list[dict]:
             comp = seg.comp_at(int(st["x"]), int(st["y"]))
             cands = per.candidates(prev)
             fresh = P.rank_click_candidates(seg, per.hud_mask())
-            info = {"bg": comp is None or comp.bg, "rank": None, "rank_fresh": None, "type_rank": None,
+            info = {"bg": comp is None or comp.bg, "rank": None, "rank_fresh": None, "type_rank": None, "shown": False,
                     "n_cands": len(cands), "n_types": len({c.ctype for c in cands})}
             if comp is not None and not comp.bg:
                 grp = seg.group_of(comp.id)
@@ -138,6 +138,7 @@ def replay_click_ranks(rep: dict) -> list[dict]:
                     if c.ctype not in types:
                         types.append(c.ctype)
                 info["type_rank"] = types.index(grp.ctype) if grp.ctype in types else None
+                info["shown"] = grp.ctype in P.shown_types(cands)
         pc = per.observe(prev, st["frames"] or [st["frame"]], a, level=st["levels"], state=st["state"])
         if info is not None:
             info["effective"] = (not pc.noop) or st["levels"] > lv

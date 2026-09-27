@@ -1,0 +1,38 @@
+{
+  "_comment": "Template candidate for automation/build_notebook.py. Copy per experiment (one thesis per submission, plans/EXPERIMENTS.md). kernel.title must slugify to kernel.id's slug (MISTAKES #1); for an existing kernel keep its exact title. serving_profile names serving/profiles/<name>.json (swap in the EXP-001 winner). source_version null = the notebook accepts whatever arc3-hydra-src version is attached; build with --source-dir/--source-version to pin it.",
+  "name": "example-hydra1",
+  "kernel": {
+    "id": "kragglenote2forwork/arc3-hydra-1",
+    "title": "ARC3 Hydra 1",
+    "is_private": true
+  },
+  "source_dataset": "kragglenote2forwork/arc3-hydra-src",
+  "source_version": null,
+  "serving_profile": "flashnext_baseline",
+  "analyzer_env": {
+    "MULTIMODAL_UPSCALE": "12"
+  },
+  "duck_patches": {
+    "DUCK_PATCHES": "1",
+    "DUCK_PATCH_B08_SCHEDULER": "1"
+  },
+  "scheduler": {},
+  "solver": {
+    "concurrency": 28,
+    "analyzer_timeout": 900.0,
+    "max_runtime_s_per_game": 7920.0,
+    "max_actions_per_game": null,
+    "save_request_logs": false
+  },
+  "smoke": {
+    "games": ["ls20", "vc33", "ft09"],
+    "minutes": 8
+  },
+  "time": {
+    "soft_deadline_s": 30900,
+    "notebook_limit_s": 32400,
+    "expected_games": 110
+  },
+  "extra_dataset_sources": [],
+  "extra_model_sources": []
+}

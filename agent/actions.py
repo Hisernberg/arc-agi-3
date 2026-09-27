@@ -760,11 +760,13 @@ class ActionChannel:
                 g[m] = -1
                 return g.tobytes()
 
+            # a loop is cut only if every step in it is a plain single-frame step: animated steps may
+            # carry hidden state (a demo played once, a recorded ghost) even when they end where they began
             out: list[StepRecord] = []
             pos: dict[bytes, int] = {key(at.start): -1}
             for r in recs:
                 k = key(r.frame_after)
-                if k in pos:
+                if k in pos and r.n_frames <= 1 and all(q.n_frames <= 1 for q in out[pos[k] + 1:]):
                     out = out[:pos[k] + 1]
                     pos = {kk: i for kk, i in pos.items() if i < len(out)}
                 else:

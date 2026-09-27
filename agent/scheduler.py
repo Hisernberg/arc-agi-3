@@ -17,7 +17,7 @@ decides which parked game gets the next free slot.
   (default 3x). Nothing assumes 9 h or 110 games.
 * **Everyone is played.** Games are admitted in gateway order while the active set is below `max_active`, and a
   linear *start curve* forces admission so the last game starts by half of `window - floor` (the tail
-  is not cut short: simulated tail/head service ~0.95 vs 0.55 for stock TAAF); when the active set
+  is not cut short: simulated tail/head service ~0.85 vs 0.55 for stock TAAF); when the active set
   is full, the most stagnant game that already had its floor is retired to make room. A newly admitted game gets
   its first turn before any other non-urgent game.
 * **Progress-aware priority.** Weighted fair queuing on per-game virtual time: *hot* (cleared a level within the
@@ -85,7 +85,7 @@ class SchedulerConfig:
     start_curve_frac: float = 0.5      # last game admitted by t0 + start_curve_frac x (window - floor)
     max_active: int | None = None      # None: sized from the measured turn time (keepalive feasibility)
     keepalive_util: float = 0.5        # share of capacity keepalive turns may take when sizing max_active
-    turn_estimate_s: float = 90.0      # prior for the turn-duration EWMA
+    turn_estimate_s: float = 150.0     # prior for the turn-duration EWMA (09-22 production: ~170 s at 28 games)
     w_hot: float = 4.0
     w_fresh: float = 2.0
     w_normal: float = 1.0
@@ -191,7 +191,9 @@ class ProgressScheduler:
         self.order = ids
         self.t0 = float(now)
         self.deadline = float(deadline)
-        self.stop_at = self.deadline - self.cfg.stop_margin_s
+        # never let the stop margin eat a short window (smoke runs, rehearsals): at most 20 % of it
+        self.stop_margin_s = min(self.cfg.stop_margin_s, 0.2 * max(0.0, self.deadline - self.t0))
+        self.stop_at = self.deadline - self.stop_margin_s
         self.d_est = float(turn_estimate_s or self.cfg.turn_estimate_s)
         self.plan = plan_budget(len(ids), self.stop_at - self.t0, self.cfg, self.d_est)
         self.running = 0
@@ -604,7 +606,8 @@ class ProgressPolicy(_Policy):
 
     def start(self, games, slots, now, deadline, turn_s):
         cfg = dataclasses.replace(self.cfg or SchedulerConfig(), slots=slots)
-        self.core = ProgressScheduler([g.gid for g in games], cfg, now=now, deadline=deadline, turn_estimate_s=turn_s)
+        # the real scheduler does not know the throughput in advance: start from the config prior, learn online
+        self.core = ProgressScheduler([g.gid for g in games], cfg, now=now, deadline=deadline)
 
     def tick(self, now):
         self.core.tick(now)
