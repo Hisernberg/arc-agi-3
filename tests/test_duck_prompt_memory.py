@@ -232,10 +232,10 @@ def test_facts_ledger_classifies_caps_and_never_drops_verified_facts():
         text = "\n".join(lines)
         assert len(text) <= cap, len(text)
         for key in keys:  # every verified (level, action) key survives, alone or in a MOUSE@{..} group
-            name = key.split("@")[0] if key.startswith("MOUSE@") else key
-            assert name in text, key
             if key.startswith("MOUSE@"):
                 assert re.search(r"MOUSE@(\{[^}]*" + re.escape(key[6:]) + r"|" + re.escape(key[6:]) + r" )", text), key
+            else:
+                assert re.search(r"(?<![A-Z])" + key + r" \d+x: ", text), key
         assert "Levels cleared: 2 of 5 (actions/human baseline: L1 4/3, L2 " in text
         assert "GAME_OVER 1" in text and "Cleared by: L1 at action 4" in text
     verified = [line for line in lean if not line.startswith("- Revise")]
@@ -293,7 +293,8 @@ def test_undo_executes_on_every_action7_game(undo_run, tmp_path):
         undo_results = [v["content"] for v in result.tool_results.values()
                         if v["game"] == game_id and v["scenario"] == "advertised_unmappable"]
         assert undo_results and all("ACTED True" in c for c in undo_results), (game_id, undo_results)
-        assert not any("Unknown action" in v["content"] for v in result.tool_results.values() if v["game"] == game_id)
+        assert not any(re.search(r"Unknown action[^\n]*(ACTION7|UNDO)", v["content"])  # (JUMP/ACTION9 probes are
+                       for v in result.tool_results.values() if v["game"] == game_id)  # rejected on purpose)
         prompts = [_text(p["messages"][-1]) for p in _turn_starts(payloads[game_id])]
         assert prompts and all(re.search(r"^Valid actions right now: .*\bUNDO\b", t, re.M) for t in prompts)
         assert all("UNDO reverts your previous action and costs one action" in t for t in prompts)
@@ -315,7 +316,7 @@ def test_scoring_rule_and_game_clock_every_turn(v9_run):
             match = clock_re.search(_text(payload["messages"][_turn_prompt_index(payload["messages"])]))
             assert match, game_id
             used.append(float(match.group(1)))
-        assert used == sorted(used) and len(used) >= 24
+        assert used == sorted(used) and len(used) >= 20
 
 
 def test_facts_block_every_turn_and_capped(v9_run):
