@@ -1556,9 +1556,17 @@ class ToolAgent:
         if observed_max_level > current_level:
             state_line += f" out of observed max level {observed_max_level} so far"
         state_line += "."
+        if patches.enabled("P3_DISCIPLINE") and previous_step_summary and previous_step_summary.get("level_transition"):
+            # [DUCK-PATCH P3] verify why the last level was won before acting on the new one.
+            lines.append(LEVEL_CLEARED_LINE_V9)
+        lines.append(state_line)
+        if patches.enabled("P1_SCORING"):
+            # [DUCK-PATCH P1] per-turn game clock (pacing) from the solver's status.
+            clock_line = _game_clock_line(self._game_status)
+            if clock_line:
+                lines.append(clock_line)
         lines.extend(
             [
-                state_line,
                 f"Valid actions right now: {_format_valid_action_line(valid_actions)}.",
                 "Only tool: `python`. It receives `current_frame`, `previous_frame`, `history`, `transitions`, `last_transition`, `valid_actions`, `last_action_result`, and `action(actions)`.",
                 "Only letter-coded board views and lightweight metadata are exposed; raw numeric color IDs are not available.",
@@ -1583,16 +1591,25 @@ class ToolAgent:
             lines.append(
                 "Focus on what changed most recently in `history`, update the target environment change if needed, and separate gameplay-object changes from HUD-only changes."
             )
+        notes_line = (
+            "If you include assistant text before a tool call, keep it short and use it to update the world model. Helpful optional prefixes are `World model:`, `Goal model:`, `Action model:`, `Recent findings:`, `Open questions:`, `Plan:`, and `Cross-level notes:`."
+        )
+        if patches.enabled("P3_DISCIPLINE"):
+            # [DUCK-PATCH P3] 67% of Qwen tool-call turns kept their world-model update in hidden
+            # reasoning only, so it was never carried (research/11 734843).
+            notes_line = VISIBLE_NOTES_LINE_V9
         lines.extend(
             [
                 "When ready, call `action(actions)` from inside the `python` tool with the best valid action or ordered batch selected by your code. If your code has found a reliable short sequence, prefer batching it in one call.",
                 "You may call `action(actions)` more than once in one Python snippet if your search or control loop needs it.",
-                "If you include assistant text before a tool call, keep it short and use it to update the world model. Helpful optional prefixes are `World model:`, `Goal model:`, `Action model:`, `Recent findings:`, `Open questions:`, `Plan:`, and `Cross-level notes:`.",
+                notes_line,
                 TOOL_CALL_FORMAT_GUIDANCE,
             ]
         )
         if "MOUSE" in _normalize_valid_actions(valid_actions):
             lines.append("If you use MOUSE, include integer row and col arguments.")
+        if patches.enabled("P2_UNDO") and "UNDO" in _normalize_valid_actions(valid_actions):
+            lines.append(UNDO_LINE_V9)  # [DUCK-PATCH P2]
         return "\n".join(lines)
 
     def _tools(self, state_path: Path) -> list[dict[str, Any]]:
@@ -1626,6 +1643,18 @@ class ToolAgent:
         tools: list[dict[str, Any]] | None,
         request_timeout_seconds: float | None = None,
     ) -> _ChatCompletionResult:
+        extra_template_kwargs: dict[str, Any] | None = None
+        if patches.enabled("M1_THINK"):
+            # [DUCK-PATCH M1] the retained reasoning must actually be rendered: Qwen chat templates
+            # read `reasoning_content` and render historical thinking only with preserve_thinking
+            # (stock sent only `reasoning` and relied on the server's template default).
+            messages = [
+                {**message, "reasoning_content": message["reasoning"]}
+                if message.get("role") == "assistant" and message.get("reasoning") and not message.get("reasoning_content")
+                else message
+                for message in messages
+            ]
+            extra_template_kwargs = {"preserve_thinking": True}
         payload = build_chat_payload(
             provider=self._model.provider,
             model=self._model.model_id,
@@ -1638,6 +1667,7 @@ class ToolAgent:
             tools=tools,
             tool_choice=_request_tool_choice(tools),
             seed=_LOCAL_ANALYZER_SEED,
+            extra_chat_template_kwargs=extra_template_kwargs,
         )
         def post_chat(request_payload: dict[str, Any]) -> requests.Response:
             return requests.post(
@@ -1932,6 +1962,9 @@ class ToolAgent:
                 for key in _F2_RESULT_KEYS
                 if key in self._last_action_result
             }
+        if step_executed and patches.enabled("M2_FACTS"):
+            # [DUCK-PATCH M2] GAME_OVER / level completion per step, for the verified-facts ledger.
+            self._facts_ledger().note_action_results(action_results)
         if step_executed:
             self._last_step_summary = self._summarize_step_sequence(action_results)
             self._update_summarized_knowledge_from_step_summary()

@@ -46,6 +46,7 @@ def build_chat_payload(
     tools: list[dict[str, Any]] | None = None,
     tool_choice: str | None = None,
     seed: int | None = None,
+    extra_chat_template_kwargs: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": model,
@@ -66,6 +67,9 @@ def build_chat_payload(
         if top_k > 0:
             payload["top_k"] = top_k
         payload["chat_template_kwargs"] = {"enable_thinking": bool(thinking)}
+        if extra_chat_template_kwargs:
+            # [DUCK-PATCH M1] e.g. {"preserve_thinking": True}; None keeps the stock payload.
+            payload["chat_template_kwargs"].update(extra_chat_template_kwargs)
         if seed is not None and seed >= 0:
             payload["seed"] = seed
 
