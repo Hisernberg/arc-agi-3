@@ -1036,7 +1036,7 @@ def _fg_contact(seg: Segmentation) -> np.ndarray:
 
 def rank_click_candidates(seg: Segmentation, hud_mask: Optional[np.ndarray] = None,
                           dead: Optional[Counter] = None, live: Optional[Counter] = None,
-                          max_n: int = 64, include_bg: bool = True,
+                          max_n: int = 128, include_bg: bool = True,
                           live_shapes: Optional[Counter] = None,
                           dead_inst: Optional[Counter] = None,
                           live_pos: Optional[dict] = None) -> list[ClickCandidate]:
@@ -1413,7 +1413,7 @@ class Perceiver:
         return pc
 
     # -- outputs ----------------------------------------------------------------------------
-    def candidates(self, frame: Any, max_n: int = 64) -> list[ClickCandidate]:
+    def candidates(self, frame: Any, max_n: int = 128) -> list[ClickCandidate]:
         return rank_click_candidates(self.seg(frame), self.hud.mask(), self.dead, self.live, max_n,
                                      live_shapes=self.live_shapes, dead_inst=self.dead_inst,
                                      live_pos=self.live_pos)

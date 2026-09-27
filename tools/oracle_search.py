@@ -760,7 +760,8 @@ def cmd_report(args) -> None:
                                 lo=b["online_cost_lo"], hi=b["online_cost_hi"], status=b["status"], rk=k, rmed=med,
                                 p1=b.get("probe1_cost"), p1_noop=b.get("probe1_noop"), p1_cands=b.get("probe1_cands"),
                                 p1_go=b.get("probe1_gameover"), p1_new=b.get("probe1_new"), noop=b["noop_frac"],
-                                eff=b["branch_eff"], cands=b["branch_cands"])
+                                eff=b["branch_eff"], cands=b["branch_cands"],
+                                lo_nn=b["online_cost_lo"] - round(b["noop_frac"] * b["tried"]))
     table = "\n".join(out)
     out = []
     w = out.append
@@ -808,6 +809,7 @@ def cmd_report(args) -> None:
     w(f"| oracle simulator: BFS min length where solved, stop at first unsolved | {scen(lambda v: v['len'] if v['solved'] else None):.2f} |")
     w(f"| search-only online, optimistic (cost lo) | {scen(lambda v: v['lo'] if v['solved'] else None):.2f} |")
     w(f"| search-only online, pessimistic (cost hi) | {scen(lambda v: v['hi'] if v['solved'] else None):.2f} |")
+    w(f"| search-only online, cost lo with a perfect no-op predictor (no-op tries free) | {scen(lambda v: v['lo_nn'] if v['solved'] else None):.2f} |")
     w(f"| structured random play (>=3/5 runs solve; median actions) | {scen(lambda v: v['rmed'] if v['rk'] >= 3 else None):.2f} |")
     w("\nprobe-then-LLM: spend up to P real actions on BFS-style probing; if it wins, done; else the LLM plays the level "
       "after the P wasted actions. LLM proxies: Astra per-level actions, or human-baseline-efficiency play.")

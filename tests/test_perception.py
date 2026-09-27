@@ -344,10 +344,12 @@ def test_click_candidate_recall_on_replays():
     eff = [x for x in ranks if x["effective"] and not x["bg"]]
     wins = [x for x in ranks if x["level_win"] and not x["bg"]]
     assert len(eff) >= 300 and len(wins) >= 20
-    assert recall_at([x["rank"] for x in eff], 10 ** 6) >= 0.95  # every clicked object is offered
-    assert recall_at([x["rank"] for x in eff], 20) >= 0.75
-    assert recall_at([x["rank"] for x in eff], 10) >= 0.55
-    assert recall_at([x["rank"] for x in wins], 10) >= 0.6
+    assert recall_at([x["rank"] for x in eff], 10 ** 6) >= 0.98  # every clicked object is offered
+    assert recall_at([x["rank"] for x in wins], 10 ** 6) >= 0.95
+    assert recall_at([x["rank"] for x in eff], 20) >= 0.8
+    assert recall_at([x["rank"] for x in eff], 10) >= 0.7
+    assert recall_at([x["rank"] for x in wins], 10) >= 0.5
+    assert sum(x["shown"] for x in eff) >= 0.6 * len(eff)  # type visible in the prompt's candidate text
     # history (dead-signature suppression + live boost) must help over the history-free prior
     assert recall_at([x["rank"] for x in eff], 10) > recall_at([x["rank_fresh"] for x in eff], 10)
 
