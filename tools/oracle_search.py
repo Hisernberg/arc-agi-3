@@ -679,6 +679,194 @@ def cmd_noop(args) -> None:
 
 
 # ------------------------------------------------------------------------------------------------
+# report: tables, classification, probe-then-LLM score model
+# ------------------------------------------------------------------------------------------------
+TRIVIAL_DEPTH = 8  # (a) = BFS-solved within the cap with a solution of <= 8 actions
+SIMPLE_BRANCH = 2.0  # (b) = not (a), but a deeper solve or a slowly growing state graph (new states/node)
+
+
+def classify(r: dict) -> str:
+    """a = trivially searchable (BFS solved, <= TRIVIAL_DEPTH actions); b = search-hard but structure-simple
+    (BFS solved deeper, or unsolved with effective branching <= SIMPLE_BRANCH new states per expanded node);
+    c = needs reasoning (unsolved, the frame-level state graph fans out faster)."""
+    b = r.get("bfs") or {}
+    if b.get("status") == "solved" and b.get("verified", True):
+        return "a" if b["length"] <= TRIVIAL_DEPTH else "b"
+    if b.get("status") == "exhausted":
+        return "c"  # the frame-level graph closes without a win: hidden state / needs a non-candidate action
+    return "b" if (b.get("branch_eff") or 99) <= SIMPLE_BRANCH else "c"
+
+
+def rand_summary(rr: list[dict]) -> tuple[int, Optional[int]]:
+    ok = sorted(x["actions"] for x in rr if x.get("solved"))
+    return len(ok), (ok[len(ok) // 2] if ok else None)
+
+
+def game_score(costs: list, baseline: list[int]) -> float:
+    """Sequential play: levels count only while every earlier level was completed (costs[i] None = stuck)."""
+    done = 0
+    for c in costs:
+        if c is None:
+            break
+        done += 1
+    la = [int(c) for c in costs[:done]] + [0] * (len(baseline) - done)
+    return score_from_level_actions(la, baseline, done)
+
+
+def load_search(tag: str) -> dict:
+    p = os.path.join(OUT, f"search_{tag}.jsonl")
+    rows = {}
+    for r in map(json.loads, open(p)):
+        if "error" in r and (r["game"], r["level"]) in rows:
+            continue
+        rows[(r["game"], r["level"])] = r
+    return rows
+
+
+def cmd_report(args) -> None:
+    starts = load_starts()
+    rows = load_search(args.tag)
+    games = sorted(starts)
+    out = []
+    w = out.append
+    # ---------------- per-level table
+    w("| game | L | human | Astra | BFS | min len | depth | states | cands/node | new/node | no-op % | online cost lo-hi | probe-1 cost | random k/5 (median) | class |")
+    w("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    cls_count = Counter()
+    per = {}
+    for g in games:
+        n = starts[g]["n_levels"]
+        for lv in range(1, n + 1):
+            r = rows.get((g, lv))
+            base = starts[g]["baseline"][lv - 1]
+            astra = starts[g]["level_actions"][lv - 1]
+            if r is None or "error" in r:
+                w(f"| {g} | {lv} | {base} | {astra} | {'error' if r else 'n/a'} | | | | | | | | | | |")
+                continue
+            b = r["bfs"]
+            c = classify(r)
+            cls_count[c] += 1
+            k, med = rand_summary(r.get("random", []))
+            st = {"solved": "solved", "timeout": "t/o", "exhausted": "exhausted", "max_depth": "max-depth"}[b["status"]]
+            if b.get("beam_cut"):
+                st += " (beam)"
+            ln = b.get("length", "")
+            depth = b.get("length") if b["status"] == "solved" else f">{b['depth_done']}"
+            w(f"| {g} | {lv} | {base} | {astra} | {st} | {ln} | {depth} | {b['states']} | {b['branch_cands']} | "
+              f"{b['branch_eff']} | {round(100 * b['noop_frac'])} | "
+              f"{(str(b['online_cost_lo']) + '-' + str(b['online_cost_hi'])) if b['status'] == 'solved' else '>' + str(b['online_cost_lo'])} | "
+              f"{b.get('probe1_cost', '')} | {k}/5{f' ({med})' if med else ''} | {c} |")
+            per[(g, lv)] = dict(base=base, astra=astra, cls=c, solved=b["status"] == "solved", len=b.get("length"),
+                                lo=b["online_cost_lo"], hi=b["online_cost_hi"], status=b["status"], rk=k, rmed=med,
+                                p1=b.get("probe1_cost"), p1_noop=b.get("probe1_noop"), p1_cands=b.get("probe1_cands"),
+                                p1_go=b.get("probe1_gameover"), p1_new=b.get("probe1_new"), noop=b["noop_frac"],
+                                eff=b["branch_eff"], cands=b["branch_cands"])
+    table = "\n".join(out)
+    out = []
+    w = out.append
+    # ---------------- class summary
+    w(f"classes: {dict(sorted(cls_count.items()))}  (of {sum(cls_count.values())} levels)")
+    by_game = defaultdict(list)
+    for (g, lv), v in sorted(per.items()):
+        by_game[g].append(v)
+    w("\n| game | levels | a | b | c | leading levels BFS-solvable | levels solved by BFS | solved lens | Astra/human |")
+    w("|---|---|---|---|---|---|---|---|---|")
+    for g in games:
+        vs = by_game[g]
+        lead = 0
+        for v in vs:
+            if not v["solved"]:
+                break
+            lead += 1
+        cc = Counter(v["cls"] for v in vs)
+        lens = ",".join(str(v["len"]) if v["solved"] else "-" for v in vs)
+        ah = sum(v["astra"] for v in vs) / max(1, sum(v["base"] for v in vs))
+        w(f"| {g} | {len(vs)} | {cc['a']} | {cc['b']} | {cc['c']} | {lead} | {sum(v['solved'] for v in vs)} | {lens} | {ah:.2f} |")
+    # ---------------- per-level ratios for solved levels
+    sol = [v for v in per.values() if v["solved"]]
+    if sol:
+        rl = sorted(v["len"] / v["base"] for v in sol)
+        rlo = sorted(v["lo"] / v["base"] for v in sol)
+        rhi = sorted(v["hi"] / v["base"] for v in sol)
+        med = lambda xs: xs[len(xs) // 2]  # noqa: E731
+        w(f"\nsolved levels: {len(sol)}; median min-len/human = {med(rl):.2f}; median online-lo/human = {med(rlo):.2f}; "
+          f"median online-hi/human = {med(rhi):.2f}; online-lo <= human on {sum(x <= 1 for x in rlo)}, <= 2x on "
+          f"{sum(x <= 2 for x in rlo)}, <= 3x on {sum(x <= 3 for x in rlo)}")
+    # ---------------- scenario scores
+    def scen(fn) -> float:
+        tot = 0.0
+        for g in games:
+            vs = by_game[g]
+            costs = [fn(v) for v in vs]
+            tot += game_score(costs, starts[g]["baseline"])
+        return tot / len(games)
+
+    w("\n| scenario (mean game score over 25 games, sequential levels) | score |")
+    w("|---|---|")
+    w(f"| human baseline everywhere | {scen(lambda v: v['base']):.2f} |")
+    w(f"| GPT-6 Astra recordings (per-level actions incl. resets) | {scen(lambda v: v['astra']):.2f} |")
+    w(f"| oracle simulator: BFS min length where solved, stop at first unsolved | {scen(lambda v: v['len'] if v['solved'] else None):.2f} |")
+    w(f"| search-only online, optimistic (cost lo) | {scen(lambda v: v['lo'] if v['solved'] else None):.2f} |")
+    w(f"| search-only online, pessimistic (cost hi) | {scen(lambda v: v['hi'] if v['solved'] else None):.2f} |")
+    w(f"| structured random play (>=3/5 runs solve; median actions) | {scen(lambda v: v['rmed'] if v['rk'] >= 3 else None):.2f} |")
+    w("\nprobe-then-LLM: spend up to P real actions on BFS-style probing; if it wins, done; else the LLM plays the level "
+      "after the P wasted actions. LLM proxies: Astra per-level actions, or human-baseline-efficiency play.")
+    w("\n| P (probe budget, actions) | LLM=Astra, cost lo | LLM=Astra, cost hi | LLM=human, cost lo | LLM=human, cost hi | search-only floor lo |")
+    w("|---|---|---|---|---|---|")
+    for Pb in (0, 8, 16, 32, 64, 128, 256, 512):
+        def hyb(llm, key, Pb=Pb):
+            def f(v):
+                c = v[key]
+                if v["solved"] and c <= Pb:
+                    return c
+                spent = Pb if (v["solved"] or v["status"] == "timeout") else min(Pb, c)
+                return spent + v[llm]
+            return f
+
+        def floor(v, Pb=Pb):
+            return v["lo"] if v["solved"] and v["lo"] <= Pb else None
+
+        w(f"| {Pb} | {scen(hyb('astra', 'lo')):.2f} | {scen(hyb('astra', 'hi')):.2f} | {scen(hyb('base', 'lo')):.2f} | "
+          f"{scen(hyb('base', 'hi')):.2f} | {scen(floor):.2f} |")
+    w(f"\nperfect selector (knows which is cheaper per level): LLM=Astra lo {scen(lambda v: min(v['lo'], v['astra']) if v['solved'] else v['astra']):.2f}; "
+      f"LLM=human lo {scen(lambda v: min(v['lo'], v['base']) if v['solved'] else v['base']):.2f}; "
+      f"with a simulator (min len) LLM=Astra {scen(lambda v: min(v['len'], v['astra']) if v['solved'] else v['astra']):.2f}")
+    # ---------------- depth-1 probing
+    p1 = [v for v in per.values() if v.get("p1_cands")]
+    if p1:
+        tot_c = sum(v["p1_cands"] for v in p1)
+        w(f"\ndepth-1 probe (every candidate once at the level start): median cost "
+          f"{sorted(v['p1'] for v in p1)[len(p1) // 2]} actions, median cost/human baseline "
+          f"{sorted(v['p1'] / v['base'] for v in p1)[len(p1) // 2]:.2f}; no-op share {sum(v['p1_noop'] for v in p1) / tot_c:.2f}; "
+          f"GAME_OVER share {sum(v['p1_go'] or 0 for v in p1) / tot_c:.3f} (levels with any: {sum(1 for v in p1 if v['p1_go'])}); "
+          f"levels where probe-1 cost <= 0.5x human: {sum(v['p1'] <= 0.5 * v['base'] for v in p1)}/{len(p1)}")
+    # ---------------- no-op traces
+    np_ = os.path.join(OUT, "noop_traces.jsonl")
+    if os.path.exists(np_):
+        tr = [json.loads(x) for x in open(np_)]
+        w("\n| trace set | runs | actions | no-op % | repeat no-op % | click no-op % | key no-op % |")
+        w("|---|---|---|---|---|---|---|")
+        for src in ("human", "arcprize_model", "astra"):
+            ts = [t for t in tr if t["source"] == src]
+            if not ts:
+                continue
+            A = sum(t["actions"] for t in ts)
+            ca = sum(t.get("click_actions", 0) for t in ts)
+            ka = sum(t.get("key_actions", 0) for t in ts)
+            w(f"| {src} | {len(ts)} | {A} | {100 * sum(t.get('noop', 0) for t in ts) / A:.1f} | "
+              f"{100 * sum(t.get('repeat_noop', 0) for t in ts) / A:.1f} | "
+              f"{100 * sum(t.get('click_noop', 0) for t in ts) / max(1, ca):.1f} | {100 * sum(t.get('key_noop', 0) for t in ts) / max(1, ka):.1f} |")
+        w("\n| human trace | version | actions | no-op % | repeat % |")
+        w("|---|---|---|---|---|")
+        for t in tr:
+            if t["source"] == "human":
+                w(f"| {t['game_id'][:4]} | {t['game_id']} | {t['actions']} | {100 * t['noop_frac']:.1f} | {100 * t['repeat_noop_frac']:.1f} |")
+    print(table)
+    print()
+    print("\n".join(out))
+
+
+# ------------------------------------------------------------------------------------------------
 # CLI
 # ------------------------------------------------------------------------------------------------
 def main(argv: list[str]) -> int:
