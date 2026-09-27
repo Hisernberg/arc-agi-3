@@ -2,12 +2,13 @@
 
 `SCRATCH` = `/tmp/claude-0/-home-user-arc-agi-3/839fb9f9-4d34-537a-a4fe-103d3cf7eb7f/scratchpad`.
 Raw inventories are in `SCRATCH/hf/user_inventory.txt`, `SCRATCH/hf/public_meta.json` and `SCRATCH/hf/public/_cards/` (about 170 model and dataset cards). Clone logs are in `SCRATCH/github/clone.log`.
+Disk footprint: `SCRATCH/hf/user` 0.74 GB, `SCRATCH/hf/public` about 3 GB, `SCRATCH/github` 4.9 GB (3.0 GB of it is Tufa's example-run).
 Relevance is scored from 1 to 5 by how much the item helps us reach an 18–20+ score on the Kaggle leaderboard. The Kaggle setup is 1x RTX PRO 6000 with 96 GB, runs offline and has a 9-hour budget.
 
 ## TL;DR
 
-1. **Top teams do not rely on a bigger LLM.**
-   - **Tong Hui Kang (#3, 20.53)** publishes an imitation-trained per-coordinate policy of about 0.4M parameters (`tonghuikang/arc3`). It has 384 binary features per cell and action, colour and click heads. It is trained only on won trajectories from *variant* games and validated on the base games. The architecture search was part of an autoresearch hackathon run with Modal.
+1. **What the top teams have published:**
+   - **Tong Hui Kang (#3, 20.53)** publishes an imitation-trained per-coordinate policy of about 0.4M parameters (`tonghuikang/arc3`, labelled "Public version"). It is not confirmed that this is what produced his leaderboard score, and the model class and training code are withheld. It has 384 binary features per cell and action, colour and click heads. It is trained only on won trajectories from *variant* games and validated on the base games. The architecture search was part of an autoresearch hackathon run with Modal.
    - **Tufa Labs (#1)** released the full Duck harness together with a 2.8 GB run: 25 games × 20 passes with Qwen3.6-27B-FP8, mean 1.60 per pass.
    - **NVIDIA** (probably the NVARC3 team, #6) released DreamTeam, a six-agent solver built around an executable world model, plus 25 generated games.
    - **da-fr/arc-agi-3-solution** (Daniel Franzen, #5) was created on 2026-09-25 and is still empty. Watch it.
@@ -15,7 +16,7 @@ Relevance is scored from 1 to 5 by how much the item helps us reach an 18–20+ 
    - human play: 340 sessions covering all 25 games;
    - Schema-harness frontier traces: 50 runs (guanning's larger GPT-5.6 Sol and Opus 4.8 sets are gated);
    - Kepler Opus-5 traces with a per-game "lab notebook" and a 100.00 scorecard;
-   - ARA Labs: about 80 repos with winning replay scripts for each level and model;
+   - ARA Labs: 81 repos with winning replay scripts for each level and model;
    - 14.6M transition rows (`fredericowieser/arc-agi-3-wm-traces`).
 3. **Extra environments for training and validation beyond the 25 public games:**
    - 253 community games in `theredbluepill/arc-interactive`;
@@ -80,7 +81,7 @@ Related GitHub repos belonging to the user (`Hisernberg`, found through search):
 | guanning schema traces | [guanning/arc-agi-3-schema-traces-opus48](https://huggingface.co/datasets/guanning/arc-agi-3-schema-traces-opus48) (0.5 GB), [-gpt56-xhigh](https://huggingface.co/datasets/guanning/arc-agi-3-schema-traces-gpt56-xhigh) (0.41 GB), [-gpt56](https://huggingface.co/datasets/guanning/arc-agi-3-schema-traces-gpt56) (2.6 GB, 100 runs) | 0.4–2.6 GB, **gated (manual approval), 403** | Same `world_model_v5` harness. The gpt56 set is the full sweep split by reasoning effort; its card says effort matters most. | 4 | **not accessible**; access would have to be requested on HF with the Nabidnur account (not done automatically). Card in `SCRATCH/hf/public/_cards/`. |
 | guanning/arc3-runs | [link](https://huggingface.co/datasets/guanning/arc3-runs) | 2.28 GB, **gated (manual)** | Raw run directories: sol_xhigh, sol_max, opus48, fable5, *_cc | 3 | not accessible (403) |
 | guanning/arc3-ablation-runs | [link](https://huggingface.co/datasets/guanning/arc3-ablation-runs) | 22.3 GB, **gated (manual), 403** | 50 runs: 5 harness ablations (no backtest, BFS, MPC, text world model) × 10 games | 3 | not accessible |
-| ARA Labs agent trajectories (about 80 repos) | [AgentNativeResearchLab](https://huggingface.co/AgentNativeResearchLab) `arc-agi3-<harness>-<model>-<game>` | 4 MB–2.9 GB each, about 21 GB in total (16.6 GB of it frame recordings) | One repo per harness × model × game. Harness/model pairs: Claude Code with Opus 4.8, Fable 5 or GLM-5.2; Codex with GPT-5.5 or GPT-5.6 Sol; Antigravity with Gemini 3.1 Pro or Kimi K2.7; Kimi K2.7; Grok 4.5. Games: ar25, ft09, g50t, ls20, r11l, s5i5, su15, tr87, plus ka59, lf52 and wa30. Each has **`solutions/replay/L<n>.txt` (winning action script per level)**, `solutions/GAME.md` (mechanics and gotchas), a `reasoning/` world model, `predictions.jsonl` and accounting. The `phase2-*` repos slice the world model at cost budgets of $13/$27/$51/$76. The `*-agent-trajectories` repos include the ls20 7/7 WIN (10.5k frames). CC-BY-4.0. | 4 | all `arc-agi3-*` repos **without** `recordings/`, `episodes/` and `raw_sessions/` → `SCRATCH/hf/public/AgentNativeResearchLab__*/` |
+| ARA Labs agent trajectories (81 repos) | [AgentNativeResearchLab](https://huggingface.co/AgentNativeResearchLab) `arc-agi3-<harness>-<model>-<game>` | 4 MB–2.9 GB each, 20.8 GB in total (16.6 GB of it frame recordings) | One repo per harness × model × game. Harness/model pairs: Claude Code with Opus 4.8, Fable 5 or GLM-5.2; Codex with GPT-5.5 or GPT-5.6 Sol; Antigravity with Gemini 3.1 Pro or Kimi K2.7; Kimi K2.7; Grok 4.5. Games: ar25, ft09, g50t, ls20, r11l, s5i5, su15, tr87, plus ka59, lf52 and wa30. Each has **`solutions/replay/L<n>.txt` (winning action script per level)**, `solutions/GAME.md` (mechanics and gotchas), a `reasoning/` world model, `predictions.jsonl` and accounting. The `phase2-*` repos slice the world model at cost budgets of $13/$27/$51/$76. The `*-agent-trajectories` repos include the ls20 7/7 WIN (10.5k frames). CC-BY-4.0. | 4 | all 81 `arc-agi3-*` repos **without** `recordings/`, `episodes/` and `raw_sessions/` → `SCRATCH/hf/public/AgentNativeResearchLab__*/`. What was downloaded varies: the agent-trajectories and opus4.8 repos include `reasoning/`; the gpt5.6sol and grok repos have solutions and metadata only; phase2 has README, `meta.json` and `frontier.md`, except phase2-ar25, which is complete. Frame recordings (16.6 GB) were skipped. |
 | ARC-AGI-3 world-model transitions | [fredericowieser/arc-agi-3-wm-traces](https://huggingface.co/datasets/fredericowieser/arc-agi-3-wm-traces) (dup: Ahsna/…) | 904 MB | **14.6M (state, action, next_state) rows**, 64×64 grids. Splits: hhazard (human traces) 14.8k, rollouts 227k, rollouts_positive 6.1M, novelty_gen 8.2M, prior_games, arc_static. | 4 (for learned dynamics / policy pre-training) | `SCRATCH/hf/public/fredericowieser__arc-agi-3-wm-traces/` |
 | HHazard transitions | [HHazard/arc-agi-3](https://huggingface.co/datasets/HHazard/arc-agi-3) 1.5 GB, [HHazard/big-arc-agi-3](https://huggingface.co/datasets/HHazard/big-arc-agi-3) 1.9 GB | 1.5 / 1.9 GB | Original transition parquet; its human split is already inside the wm-traces set above | 2 | recorded only |
 | Public trace curriculum v3 | [ritwika96/arc-agi-3-public-trace-curriculum-v3](https://huggingface.co/datasets/ritwika96/arc-agi-3-public-trace-curriculum-v3) | 280 MB (27k PNGs) | 5,460 model turns and 22,184 actions derived from the Schema traces. Includes 3,627 misprediction and repair events, and **183 per-level hints generated by Qwen3.6-27B** (157 passed gates). Evaluation uses leave-one-game-out folds. Marked `training_eligible=false`. | 3 | jsonl, hints and manifests (no images) → `SCRATCH/hf/public/ritwika96__…` |
@@ -93,14 +94,17 @@ Related GitHub repos belonging to the user (`Hisernberg`, found through search):
 | leonidas123/arc3data | [link](https://huggingface.co/datasets/leonidas123/arc3data) | 2.3 GB | `recordings_converted/` and `tasks/`; no card, unknown provenance | 2 | recorded only |
 | ARC-AGI-1/2 only | arcprize/arc_agi_v1/v2_public_eval, arc_agi_2_human_testing; nvidia/Nemotron-SFT/RL-ARC-AGI-v1 (18.4 GB / 0.44 GB); Asap7772/arc-agi-all-Qwen3-* (about 200 repos); Trelis/Qwen3-4B_ds-arc-agi-* | — | The `arcprize` org on HF has **no ARC-AGI-3 data**. The official ARC-AGI-3 human dataset is mirrored by magic-sword. | 1 | recorded only |
 
-Replay scripts downloaded from ARA Labs (count of `L*.txt` files):
-- ka59 opus4.8: 7
-- su15: 8
-- tr87 (agent-trajectories and codex-gpt5.5): 6 each
-- ft09 (opus4.8, gpt5.5, gemini): 6 each
-- ls20-demo: 6
+Replay scripts downloaded from ARA Labs: 67 repos have `solutions/replay/L*.txt`. The fullest runs, by count of per-level winning scripts:
+- ar25: fable5, glm5.2, opus4.8, gpt5.6sol and grok have 8 each
+- s5i5: fable5, opus4.8 and gpt5.6sol have 8 each
+- su15: fable5 has 9; the agent-trajectories repo has 8
+- g50t: fable5 and opus4.8 have 7 each
+- ls20: opus4.8 has 7
+- ka59: opus4.8 has 7
+- ft09: 6 in most repos
+- tr87: 6 in most repos
+- r11l: fable5 and opus4.8 have 6 each
 - wa30: 4–5
-- several other runs: 1–2
 
 ---
 
