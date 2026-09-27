@@ -24,6 +24,6 @@ Sources of code:
 | 2 | B10 | **Trace mining for generic priors**: GPT-6 Astra 25 recordings, Kepler/Opus runs, AgentNative frontier traces, human sessions, Tufa example-run → per-game time-to-level, action-type mix, first-N-action patterns, which perception features precede wins | `analysis/10_trace_mining.md` | ≥ 5 concrete, game-agnostic heuristics with evidence |
 | 2 | B11 | **Oracle study (CPU)**: BFS/beam with state cloning on each public level → min actions vs human baseline; classify levels by search depth/branching; shows where cheap probing is safe | `analysis/11_oracle_study.md` | table for all 183 levels (or timeout marks) |
 | 2 | B12 | **Diff the 4.68 Team-AIRIS bundle** (`urad-duck-r10-targeted`) vs our notebook; port anything with evidence | `analysis/12_airis_diff.md` | list of deltas + verdicts |
-| 3 | B13 | HF datasets: `arc-agi-3-kaggle-notebooks`, `arc-agi-3-kaggle-discussions`, `arc-agi-3-research`, prompt pack | private datasets | uploaded with cards |
+| 3 | B13 | (PARTLY DONE 09-27: traces, discussions, frontier-replays, research) HF datasets: `arc-agi-3-kaggle-notebooks`, `arc-agi-3-kaggle-discussions`, `arc-agi-3-research`, prompt pack | private datasets | uploaded with cards |
 
 ## W1+ (GPU weeks) — see MASTER_PLAN §5; refined each Saturday by the weekly routine.

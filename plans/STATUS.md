@@ -7,4 +7,7 @@ _Last updated: 2026-09-27 09:00 UTC_
 - **GPU quota**: 27.6/30 h used; refresh **2026-10-03 00:00 UTC**. No ARC GPU use and no submissions until then (user directive).
 - **Phase**: W0 (CPU-only build week). See `plans/BACKLOG.md`.
 - **Next GPU action**: Sat 10-03 — serving A/B (EXP-001) then first Hydra submission.
+- **HF datasets (all private, Nabidnur/)**: `arc-agi-3-traces` (replays + our run steps), `arc-agi-3-kaggle-discussions`
+  (225 topics / 1,144 posts + LB history), `arc-agi-3-frontier-replays` (25 GPT-6 Astra recordings, sessions, human baselines),
+  `arc-agi-3-research` (raw web sources + docs snapshot). Pending: `arc-agi-3-kaggle-notebooks` (after notebooks sweep).
 - **Open questions for the user**: timezone for routines; confirm secrets added as environment variables.
