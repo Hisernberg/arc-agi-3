@@ -107,7 +107,8 @@ def load_game_class(game_id: str, env_dir: str | None = None) -> tuple[type, dic
     src_path = next(p for p in (os.path.join(d, f"{class_name.lower()}.py"), os.path.join(d, f"{class_name}.py"))
                     if os.path.exists(p))
     src = open(src_path, encoding="utf-8").read()
-    mod = types.ModuleType(f"arc_agi_3.{base}")
+    mod = types.ModuleType(f"arcgame_{base}")
+    sys.modules[mod.__name__] = mod  # lets pickle / multiprocessing(fork) resolve the game classes
     exec(compile(src, src_path, "exec"), mod.__dict__)
     cls = getattr(mod, class_name)
     assert issubclass(cls, ARCBaseGame)
@@ -126,8 +127,8 @@ _ATOMIC = (str, bytes, float, complex, bool, type(None), range, types.FunctionTy
            types.ModuleType, type, enum.Enum, np.ndarray, np.generic)
 
 
-def deepcopy_remap_ids(obj: Any) -> Any:
-    memo: dict[int, Any] = {}
+def deepcopy_remap_ids(obj: Any, memo: dict[int, Any] | None = None) -> Any:
+    memo = {} if memo is None else memo
     new = copy.deepcopy(obj, memo)
     idmap = {k: id(v) for k, v in memo.items() if k != id(memo) and v is not None}
     seen: set[int] = set()
@@ -388,11 +389,17 @@ class ArcEnv:
         return self._obs(fr)
 
     # ---- cloning ---------------------------------------------------------------------------
-    def clone(self) -> "ArcEnv":
-        """Exact, independent copy (engine state + scorecard + counters)."""
+    def clone(self, share_clean_levels: bool = True) -> "ArcEnv":
+        """Exact, independent copy (engine state + scorecard + counters).
+
+        share_clean_levels: the pristine level templates (game._clean_levels) are only ever read
+        (cloned from on RESET), so clones share them instead of copying them (~2x faster)."""
         new = copy.copy(self)
         use_remap = self.clone_mode == "remap" or (self.clone_mode == "auto" and self._uses_id)
-        new.game = deepcopy_remap_ids(self.game) if use_remap else copy.deepcopy(self.game)
+        memo: dict[int, Any] = {}
+        if share_clean_levels:
+            memo[id(self.game._clean_levels)] = self.game._clean_levels
+        new.game = deepcopy_remap_ids(self.game, memo) if use_remap else copy.deepcopy(self.game, memo)
         new.card = copy.deepcopy(self.card)
         new.history = list(self.history)
         new.level_actions = list(self.level_actions)
@@ -431,10 +438,22 @@ class ArcEnv:
         f = self.frame
         return bytes([self.game.level_index]) + (f.tobytes() if f is not None else b"")
 
+    def valid_actions(self) -> list[tuple[int, dict]]:
+        """Engine-internal list of 'meaningful' actions (ARC graph-builder API: _get_valid_actions),
+        e.g. the ACTION6 targets of clickable sprites. Offline research only - the Kaggle API does
+        not expose this. bp35/lf52 flip a module global GRAPH_BUILDER=True inside that call (which
+        disables their undo recording), so it is restored afterwards."""
+        g = type(self.game).step.__globals__
+        had, saved = "GRAPH_BUILDER" in g, g.get("GRAPH_BUILDER")
+        try:
+            acts = self.game._get_valid_actions()
+        finally:
+            if had:
+                g["GRAPH_BUILDER"] = saved
+        return [(a.id.value, dict(a.data or {})) for a in acts]
+
     def valid_clicks(self) -> list[tuple[int, int]]:
-        """Engine-internal list of meaningful ACTION6 targets (sys_click / placeable sprites).
-        Offline research only - the Kaggle API does not expose this."""
-        return [(a.data["x"], a.data["y"]) for a in self.game._get_valid_actions() if a.id == GameAction.ACTION6]
+        return [(d["x"], d["y"]) for aid, d in self.valid_actions() if aid == 6]
 
     def score(self) -> dict:
         """Official per-game score (arc_agi EnvironmentScorecard.from_scorecard on this game's card)."""
