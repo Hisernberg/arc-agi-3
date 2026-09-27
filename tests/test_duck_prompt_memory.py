@@ -244,6 +244,28 @@ def test_facts_ledger_classifies_caps_and_never_drops_verified_facts():
     assert "Model notes" in "\n".join(full) and "L1 final notes" in "\n".join(full)
 
 
+def test_facts_ledger_separates_step_bar_from_board_changes():
+    """Real ls20 frames: UP moves the avatar (50 interior cells) and ticks the step bar on rows 61-62;
+    the final DOWN is blocked and only ticks the bar -> HUD/edge-only, not a board change."""
+    from arcenv import ArcEnv
+
+    env = ArcEnv("ls20", env_dir=ENV_DIR)
+    frames = [env.frame.tolist()]
+    sequence = (1, 1, 1, 1, 3, 3, 4, 2)
+    for action in sequence:
+        env.step(action)
+        frames.append(env.frame.tolist())
+    names = ["", *({1: "UP", 2: "DOWN", 3: "LEFT", 4: "RIGHT"}[a] for a in sequence)]
+    history = [HistoryEntry(action=names[i], frame=Frame(grid=tuple(map(tuple, f)), step=i, level=1))
+               for i, f in enumerate(frames)]
+    ledger = FactsLedger("ls20")
+    ledger.ingest(history)
+    up, down = ledger.levels[1].tallies["UP"], ledger.levels[1].tallies["DOWN"]
+    assert (up.changed, up.cells // up.changed, down.edge_only, down.changed) == (4, 50, 1, 0)
+    assert up.last_bbox is not None and up.last_bbox[1] < 61  # the bar is not part of the board bbox
+    assert "DOWN 1x: HUD/edge-only 1" in "\n".join(ledger.render(status=None, notes={}, max_chars=2100))
+
+
 def test_session_switch_resets_status_and_facts(tmp_path):
     art = tmp_path / "artifacts"
     art.mkdir()

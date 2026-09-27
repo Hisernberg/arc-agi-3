@@ -12,7 +12,7 @@ puts every `src/<repo>/src` or `src/<repo>` on `sys.path`).
 | Bundle manifest | `SOURCE_IDENTITY.json`, `taaf-kaggle-bundle.json` (unchanged) |
 | Source snapshot | `git_status.txt`: ARC3-Inference `aa69123` (DIRTY, branch add-kaggle-share-flag), tufa-arc-agi-framework `fe9f7c4` (clean), re-arc-3 `57e46d619d` (pinned, not bundled) |
 | Upstream compared | github.com/Tufalabs/duck-harness `main` @ `7652836056c5` (cloned 2026-09-27) |
-| Modified here | only the source patches in `PATCHES.md` (tagged `[DUCK-PATCH ...]`); everything else is byte-identical to the bundle |
+| Modified here | only the source patches in `PATCHES.md` (tagged `[DUCK-PATCH ...]`); everything else is byte-identical to the bundle. Added files (not in the bundle): `inference/agent/patches.py` (switches), `inference/agent/facts_memory.py` (M2) |
 
 ## Layout
 

@@ -7,8 +7,8 @@ trimming and is rebuilt every turn from two sources:
 
 1. **Harness-verified effects** (never dropped): every executed action is read back from the
    runtime-state history the solver writes (the real before/after frames), classified as
-   ``changed`` (cells outside the 2-cell border band changed), ``edge-only`` (only border cells
-   changed: usually a HUD/timer bar), ``no change``, ``level up`` or ``GAME_OVER`` (from the
+   ``changed`` (cells outside the 3-cell border band changed, or > 4 band cells), ``HUD/edge-only``
+   (only <= 4 band cells changed: the per-action step/timer bar), ``no change``, ``level up`` or ``GAME_OVER`` (from the
    harness's own action results), and aggregated per (level, action key). MOUSE clicks are keyed
    by the colour of the clicked cell (``MOUSE@R``) with sample hit / dead coordinates.
 2. **Model-written notes** (truncated to fit): the latest labelled blocks the harness parsed, plus
@@ -29,7 +29,11 @@ from typing import Any, Iterable
 
 from inference.utils.grid_utils import ARC_COLOR_CHARS
 
-EDGE_BAND = 2  # rows/cols within this many cells of the border count as "edge" (HUD/timer bars)
+# Rows/cols within this many cells of the border count as "edge": every public game draws a 1-2 cell
+# per-action step/timer bar there (ls20: rows 61-62, ar25: col 63, g50t: row 63), while gameplay can
+# reach row 60 (tr87). An action whose only changes are <= EDGE_MAX_CELLS edge cells is "HUD/edge-only".
+EDGE_BAND = 3
+EDGE_MAX_CELLS = 4
 MAX_MOUSE_KEYS = 6  # distinct MOUSE@colour lines per level before the rest are grouped
 MAX_SAMPLES = 3  # hit / dead click coordinates kept per MOUSE key
 
@@ -87,7 +91,7 @@ class EffectTally:
                 text += ")"
             parts.append(text)
         if self.edge_only:
-            parts.append(f"edge-only {self.edge_only}")
+            parts.append(f"HUD/edge-only {self.edge_only}")
         if self.no_change:
             parts.append(f"no change {self.no_change}")
         text = ", ".join(parts) or "no effect recorded"
@@ -221,6 +225,8 @@ class FactsLedger:
                 outcome.level_up = 1
             elif interior:
                 outcome.changed, outcome.cells, outcome.last_bbox = 1, interior, bbox
+            elif edge > EDGE_MAX_CELLS:  # a large change inside the border band is gameplay, not a bar
+                outcome.changed, outcome.cells = 1, edge
             elif edge:
                 outcome.edge_only = 1
             else:

@@ -10,27 +10,26 @@ Pipeline (all results go to $SCRATCH/oracle/*.jsonl):
   starts   replay the GPT-6 Astra recordings (current game versions, all 25 games are full WINs) in
            agent/arcenv.py, verify every recorded frame and every level completion, and store the action
            prefix that reaches each of the 183 level starts (+ Astra's per-level action counts).
-  search   from each level start: breadth-first search with exact state cloning.  Actions = keyboard
+  search   from each level start: breadth-first search with exact state snapshots.  Actions = keyboard
            actions from available_actions (no RESET/undo) + ACTION6 restricted to one click per distinct
            object/cell (agent/perception.rank_click_candidates on a connected-component segmentation).
            Dedup key = frame hash with HUD/budget bars masked (agent/perception.HudTracker, calibrated on
-           short random walks from the level start).  Time cap per level; multiprocessing over cores.
-           Records: solved, min actions found, branching, depth, distinct states, no-op rate, and the
-           real-action cost an online (clone-free) explorer would pay for the same search.
-  random   structured random play (uniform over the same candidate actions, level RESET after
-           GAME_OVER charged +1) - would random play plausibly solve the level?
+           short random walks from the level start).  CPU-time cap per level; multiprocessing over cores.
+           Records: solved, min actions found, branching, depth, distinct states, no-op rate, the real-action
+           cost an online (clone-free) explorer would pay for the same search, and structured random play
+           (uniform over the same candidate actions, level RESET after GAME_OVER charged +1).
   noop     fraction of actions in human / Astra traces that change nothing but the HUD.
   report   merge everything into tables + the probe-then-LLM score model (markdown on stdout).
 
 Usage (python 3.12 venv with the competition wheels):
   python tools/oracle_search.py starts
-  python tools/oracle_search.py search  [--cap 90] [--workers 4] [--games ls20,vc33] [--levels 1,2]
-  python tools/oracle_search.py random  [--cap 20] [--workers 4]
+  python tools/oracle_search.py search  [--cap 60] [--rand-cap 12] [--workers 4] [--games ls20,vc33] [--levels 1,2]
   python tools/oracle_search.py noop
-  python tools/oracle_search.py report  > table.md
+  python tools/oracle_search.py report  [--tag main] > table.md
 
-Library use (e.g. a harness-side probe tool): ``bfs_level(env, cap_s)`` works on any ArcEnv positioned at
-a level start; ``Keyer`` / ``candidate_actions`` are the frame-only state key and action set.
+Library use (e.g. a harness-side probe tool): ``bfs_level(env, cap_s, keyer, actions)`` works on any ArcEnv
+positioned at a level start; ``Keyer`` / ``ActionSet`` / ``calibrate_hud`` are the frame-only state key,
+candidate action set and HUD mask; ``Snapper`` gives fast exact snapshots (pickle or arcenv clone).
 """
 
 from __future__ import annotations
@@ -195,7 +194,7 @@ def env_at_level(game: str, level: int, starts: dict, competition: bool = True) 
 
 
 # ------------------------------------------------------------------------------------------------
-# agent-realistic state key + action set (frame-only; uses the harness perception pack)
+# fast exact snapshots (pickle where exact, arcenv clone otherwise)
 # ------------------------------------------------------------------------------------------------
 def rss_mb() -> float:
     try:
@@ -205,6 +204,99 @@ def rss_mb() -> float:
         return 0.0
 
 
+def _register_enum_pickling() -> None:
+    """arcengine enums carry non-plain values; pickle them by name so that game objects round-trip."""
+    import copyreg
+    import enum
+
+    import arcengine
+
+    def red(a):
+        return getattr, (type(a), a.name)
+
+    for name in dir(arcengine):
+        obj = getattr(arcengine, name)
+        if isinstance(obj, type) and issubclass(obj, enum.Enum):
+            copyreg.pickle(obj, red)
+
+
+class Snapper:
+    """snap(env) -> compact snapshot; restore(snap) -> independent ArcEnv (card-less: search does not score).
+
+    mode "pickle": the game object is pickled with its read-only level templates detached (2-7x faster than
+    deepcopy, ~7-140 KB per snapshot); used only after an exactness check against arcenv's clone.
+    mode "clone": arcenv.ArcEnv.clone() (bp35/lf52 need its id() remap; lf52/tn36 hold lambdas)."""
+
+    def __init__(self, env: ArcEnv, mode: str = "auto"):
+        import copy as _copy
+        import pickle
+
+        self._pickle = pickle
+        self._copy = _copy
+        self.template = env.clone()
+        self.template.card = None
+        self.template.history = []
+        self.clean = env.game._clean_levels
+        self.mode = "clone"
+        if mode in ("auto", "pickle") and not env._uses_id:
+            try:
+                _register_enum_pickling()
+                if self._check(env):
+                    self.mode = "pickle"
+            except Exception:  # noqa: BLE001
+                self.mode = "clone"
+
+    def _dumps(self, game) -> bytes:
+        cl = game._clean_levels
+        game._clean_levels = None
+        try:
+            return self._pickle.dumps(game, protocol=5)
+        finally:
+            game._clean_levels = cl
+
+    def snap(self, env: ArcEnv, owned: bool = True):
+        """owned=True: the caller will not touch `env` again, so clone mode may keep the object itself."""
+        if self.mode == "pickle":
+            return (self._dumps(env.game), env.last)
+        c = env if owned else env.clone()
+        c.card = None
+        c.history = []
+        return c
+
+    def restore(self, s, reuse: bool = False) -> ArcEnv:
+        if self.mode == "pickle":
+            e = self._copy.copy(self.template)
+            e.game = self._pickle.loads(s[0])
+            e.game._clean_levels = self.clean
+            e.last = s[1]
+            e.history = []
+            e.level_actions = list(self.template.level_actions)
+            return e
+        return s if reuse else s.clone()
+
+    def _check(self, env: ArcEnv, n: int = 60) -> bool:
+        rng = random.Random(3)
+        e1 = env.clone()
+        self.mode = "pickle"
+        e2 = self.restore(self.snap(env, owned=False))
+        self.mode = "clone"
+        for _ in range(n):
+            av = e1.available_actions
+            a = rng.choice(av)
+            a = [6, rng.randrange(64), rng.randrange(64)] if a == 6 else [a]
+            o1, o2 = step_env(e1, a), step_env(e2, a)
+            if o1.state != o2.state or o1.levels_completed != o2.levels_completed or len(o1.frames) != len(o2.frames):
+                return False
+            if o1.frame is not None and not np.array_equal(o1.frame, o2.frame):
+                return False
+            if o1.state == "GAME_OVER" or o1.levels_completed != env.levels_completed:
+                break
+        return True
+
+
+# ------------------------------------------------------------------------------------------------
+# agent-realistic state key + action set (frame-only; uses the harness perception pack)
+# ------------------------------------------------------------------------------------------------
 class Keyer:
     """State key = blake2b of the settled frame with the HUD mask blanked (what an agent can hash)."""
 
@@ -231,14 +323,13 @@ class ActionSet:
         self.cache: dict[bytes, list] = {}
         self.n_click_cands: list[int] = []
 
-    def __call__(self, env: ArcEnv, key: bytes) -> list:
+    def __call__(self, frame: np.ndarray, avail: list[int], key: bytes) -> list:
         acts = self.cache.get(key)
         if acts is not None:
             return acts
-        avail = env.available_actions
         acts = [[a] for a in avail if a in (1, 2, 3, 4, 5)]
-        if 6 in avail and env.frame is not None:
-            seg = P.segment(env.frame, hud_mask=self.hud_mask, scale=self.scale)
+        if 6 in avail and frame is not None:
+            seg = P.segment(frame, hud_mask=self.hud_mask, scale=self.scale)
             cands = P.rank_click_candidates(seg, self.hud_mask, max_n=self.max_clicks, include_bg=True)
             acts += [[6, int(c.x), int(c.y)] for c in cands]
             self.n_click_cands.append(len(cands))
@@ -254,14 +345,14 @@ def calibrate_hud(env: ArcEnv, n_walks: int = 6, walk_len: int = 30, seed: int =
     mask = np.zeros((64, 64), bool)
     descs = []
     scale = P.detect_scale(env.frame)
-    for w in range(n_walks):
+    acts_of = ActionSet(None, scale)
+    for _ in range(n_walks):
         hud = P.HudTracker()
         e = env.clone()
         lv0 = e.levels_completed
-        acts_of = ActionSet(None, scale)
         prev = e.frame.copy()
-        for t in range(walk_len):
-            acts = acts_of(e, prev.tobytes())
+        for _t in range(walk_len):
+            acts = acts_of(prev, e.available_actions, prev.tobytes())
             if not acts:
                 break
             a = rng.choice(acts)
@@ -277,74 +368,95 @@ def calibrate_hud(env: ArcEnv, n_walks: int = 6, walk_len: int = 30, seed: int =
 
 
 # ------------------------------------------------------------------------------------------------
-# breadth-first search with exact clones
+# breadth-first search with exact snapshots
 # ------------------------------------------------------------------------------------------------
 def bfs_level(env: ArcEnv, cap_s: float = 90.0, keyer: Optional[Keyer] = None, actions: Optional[ActionSet] = None,
-              max_depth: int = 400, rss_limit_mb: float = 2500.0) -> dict:
+              snapper: Optional[Snapper] = None, max_depth: int = 400, rss_limit_mb: float = 1000.0) -> dict:
     """BFS from `env` (a level start) until the level is completed, the graph is exhausted or `cap_s` runs out.
 
-    Also accounts what the *same* search would cost an online explorer without clones (every tried action
-    is a real action):  lo = 1 per tried action + 1 to come back after every state-changing one (perfect
-    undo);  hi = 1 per tried action + (RESET + replay of the d-step path) after every state-changing one."""
+    Online cost of the *same* search without clones (every tried action is a real action; RESET = 1):
+      lo = per tried action 1, +1 to come back after every state-changing one (perfect undo / inverse move);
+      hi = per tried action 1, + RESET + replay of the d-step path to the node after every state-changing one.
+    probe1_* = the same for trying every candidate once at the level start (depth 1 only).
+    `cap_s` is process CPU time (results do not depend on other load on the machine)."""
     t0 = time.time()
+    c0 = time.process_time()
     keyer = keyer or Keyer()
     actions = actions or ActionSet(keyer.mask, P.detect_scale(env.frame))
+    snapper = snapper or Snapper(env)
+    avail = env.available_actions
     lv0 = env.levels_completed
     rkey = keyer.key(env.frame)
     seen = {rkey}
-    frontier = [(env, [], rkey)]
+    frontier = [(snapper.snap(env), [], rkey, env.frame)]
     st = Counter()
-    per_depth = []  # (depth, frontier size expanded, new states)
-    cost_lo = cost_hi = 0
+    per_depth = []  # (depth, nodes expanded, new states)
+    cost = {"lo": 0, "hi": 0}
+    probe1 = {}
     beam_cut = False
     noop_root_kept = False
     depth_done = 0
+
+    def result(status: str) -> dict:
+        exp = max(1, st["expanded"])
+        tried = max(1, st["tried"])
+        return {"status": status, "depth_done": depth_done, "states": len(seen), "expanded": st["expanded"],
+                "tried": st["tried"], "branch_cands": round(st["cands"] / exp, 2),
+                "branch_eff": round((len(seen) - 1) / exp, 2), "noop_frac": round(st["noop"] / tried, 3),
+                "dup_frac": round(st["dup"] / tried, 3), "gameover_frac": round(st["game_over"] / tried, 3),
+                "online_cost_lo": cost["lo"], "online_cost_hi": cost["hi"], "beam_cut": beam_cut,
+                "per_depth": per_depth[-12:], "secs": round(time.time() - t0, 1),
+                "cpu": round(time.process_time() - c0, 1), "snap_mode": snapper.mode,
+                "click_cands_mean": round(float(np.mean(actions.n_click_cands)), 1) if actions.n_click_cands else 0,
+                **probe1}
+
     for depth in range(1, max_depth + 1):
         nxt = []
         n_new = 0
-        for ni, (node, path, nkey) in enumerate(frontier):
-            acts = actions(node, nkey)
+        for ni, (snap, path, nkey, nframe) in enumerate(frontier):
+            acts = actions(nframe, avail, nkey)
             st["expanded"] += 1
             st["cands"] += len(acts)
+            d = len(path)
             for i, a in enumerate(acts):
-                if time.time() - t0 > cap_s:
+                if time.process_time() - c0 > cap_s:
                     per_depth.append((depth, ni, n_new))
-                    return _bfs_result("timeout", st, seen, per_depth, depth_done, cost_lo, cost_hi, beam_cut, t0,
-                                       actions)
-                c = node.clone() if i < len(acts) - 1 else node
+                    return result("timeout")
+                c = snapper.restore(snap, reuse=(i == len(acts) - 1))
                 o = step_env(c, a)
                 st["tried"] += 1
-                d = len(path)
                 if o.levels_completed > lv0 or o.state == "WIN":
-                    cost_lo += 1
-                    cost_hi += 1
+                    cost["lo"] += 1
+                    cost["hi"] += 1
                     per_depth.append((depth, ni + 1, n_new))
-                    r = _bfs_result("solved", st, seen, per_depth, depth_done, cost_lo, cost_hi, beam_cut, t0, actions)
+                    if depth == 1:
+                        probe1.update(probe1_solved=True)
+                    r = result("solved")
                     r["path"] = path + [a]
-                    r["length"] = len(path) + 1
+                    r["length"] = d + 1
                     return r
                 if o.ignored or o.frame is None:
                     st["ignored"] += 1
-                    cost_lo += 1
-                    cost_hi += 1
+                    cost["lo"] += 1
+                    cost["hi"] += 1
                     continue
                 if o.state == "GAME_OVER":
                     st["game_over"] += 1
-                    cost_lo += 2
-                    cost_hi += 2 + d
+                    cost["lo"] += 2
+                    cost["hi"] += 2 + d
                     continue
                 k = keyer.key(o.frame)
                 if k == nkey:
                     st["noop"] += 1
-                    cost_lo += 1
-                    cost_hi += 1
+                    cost["lo"] += 1
+                    cost["hi"] += 1
                     # a first action may only flip hidden state (e.g. a tutorial demo): keep one such child
                     if depth == 1 and not noop_root_kept:
                         noop_root_kept = True
-                        nxt.append((c, path + [a], k))
+                        nxt.append((snapper.snap(c), path + [a], k, o.frame))
                     continue
-                cost_lo += 2
-                cost_hi += 2 + d
+                cost["lo"] += 2
+                cost["hi"] += 2 + d
                 if k in seen:
                     st["dup"] += 1
                     continue
@@ -352,29 +464,18 @@ def bfs_level(env: ArcEnv, cap_s: float = 90.0, keyer: Optional[Keyer] = None, a
                 n_new += 1
                 if beam_cut:
                     continue
-                nxt.append((c, path + [a], k))
-                if len(nxt) % 256 == 0 and rss_mb() > rss_limit_mb:
+                nxt.append((snapper.snap(c), path + [a], k, o.frame))
+                if len(nxt) % 128 == 0 and rss_mb() > rss_limit_mb:
                     beam_cut = True  # memory cap: keep what we have (result becomes an upper bound)
         per_depth.append((depth, len(frontier), n_new))
         depth_done = depth
+        if depth == 1:
+            probe1 = {"probe1_cands": st["tried"], "probe1_noop": st["noop"], "probe1_gameover": st["game_over"],
+                      "probe1_new": n_new, "probe1_cost": cost["lo"], "probe1_solved": False}
         if not nxt:
-            return _bfs_result("exhausted", st, seen, per_depth, depth_done, cost_lo, cost_hi, beam_cut, t0, actions)
+            return result("exhausted")
         frontier = nxt
-    return _bfs_result("max_depth", st, seen, per_depth, depth_done, cost_lo, cost_hi, beam_cut, t0, actions)
-
-
-def _bfs_result(status, st, seen, per_depth, depth_done, cost_lo, cost_hi, beam_cut, t0, actions) -> dict:
-    exp = max(1, st["expanded"])
-    tried = max(1, st["tried"])
-    new_states = len(seen) - 1
-    return {"status": status, "depth_done": depth_done, "states": len(seen), "expanded": st["expanded"],
-            "tried": st["tried"], "branch_cands": round(st["cands"] / exp, 2),
-            "branch_eff": round(new_states / exp, 2),
-            "noop_frac": round(st["noop"] / tried, 3), "dup_frac": round(st["dup"] / tried, 3),
-            "gameover_frac": round(st["game_over"] / tried, 3),
-            "online_cost_lo": cost_lo, "online_cost_hi": cost_hi, "beam_cut": beam_cut,
-            "per_depth": per_depth[-12:], "secs": round(time.time() - t0, 1),
-            "click_cands_mean": round(float(np.mean(actions.n_click_cands)), 1) if actions.n_click_cands else 0}
+    return result("max_depth")
 
 
 # ------------------------------------------------------------------------------------------------
@@ -382,15 +483,17 @@ def _bfs_result(status, st, seen, per_depth, depth_done, cost_lo, cost_hi, beam_
 # ------------------------------------------------------------------------------------------------
 def random_play(env: ArcEnv, keyer: Keyer, actions: ActionSet, max_actions: int, cap_s: float, seed: int) -> dict:
     """Uniform random choice over the candidate actions; a GAME_OVER costs a level RESET (+1) and restarts
-    from the level start.  Returns the actions spent until the level was completed (or None)."""
+    from the level start.  Returns the actions spent until the level was completed (or not)."""
     rng = random.Random(seed)
-    t0 = time.time()
+    t0 = time.process_time()
     lv0 = env.levels_completed
     e = env.clone()
+    e.card = None
+    avail = env.available_actions
     n = resets = 0
-    while n < max_actions and time.time() - t0 < cap_s:
+    while n < max_actions and time.process_time() - t0 < cap_s:
         k = keyer.key(e.frame)
-        acts = actions(e, k)
+        acts = actions(e.frame, avail, k)
         if not acts:
             break
         o = step_env(e, rng.choice(acts))
@@ -399,9 +502,10 @@ def random_play(env: ArcEnv, keyer: Keyer, actions: ActionSet, max_actions: int,
             return {"solved": True, "actions": n, "resets": resets}
         if o.state == "GAME_OVER" or o.ignored:
             e = env.clone()
+            e.card = None
             n += 1
             resets += 1
-    return {"solved": False, "actions": n, "resets": resets, "timed_out": time.time() - t0 >= cap_s}
+    return {"solved": False, "actions": n, "resets": resets, "timed_out": time.process_time() - t0 >= cap_s}
 
 
 # ------------------------------------------------------------------------------------------------
@@ -424,18 +528,17 @@ def run_level(task: tuple) -> dict:
         scale = P.detect_scale(env.frame, ignore=mask if mask.any() else None)
         rec["scale"] = list(scale)
         acts = ActionSet(keyer.mask, scale)
-        rec["root_cands"] = len(acts(env, keyer.key(env.frame)))
-        r = bfs_level(env.clone(), cap_s=cap_s, keyer=keyer, actions=acts)
+        rec["root_cands"] = len(acts(env.frame, env.available_actions, keyer.key(env.frame)))
+        snapper = Snapper(env)
+        r = bfs_level(env.clone(), cap_s=cap_s, keyer=keyer, actions=acts, snapper=snapper)
         if r["status"] == "solved":  # verify by replay on a fresh env
             v = env_at_level(game, level, starts)
             for a in r["path"]:
-                o = step_env(v, a)
+                step_env(v, a)
             r["verified"] = v.levels_completed > level
         rec["bfs"] = r
-        rr = []
-        for s in range(rand_runs):
-            rr.append(random_play(env, keyer, acts, rand_max, rand_cap_s / max(1, rand_runs), seed=1000 + s))
-        rec["random"] = rr
+        rec["random"] = [random_play(env, keyer, acts, rand_max, rand_cap_s / max(1, rand_runs), seed=1000 + s)
+                         for s in range(rand_runs)]
     except Exception as ex:  # noqa: BLE001
         import traceback
         rec["error"] = repr(ex)[:300]
@@ -464,8 +567,7 @@ def cmd_search(args) -> None:
             if (g, lv + 1) in done or str(lv) not in starts[g]["starts"]:
                 continue
             tasks.append((g, lv, args.cap, args.rand_cap, args.rand_runs, args.rand_max))
-    # interleave games so that slow games spread over the workers
-    tasks.sort(key=lambda t: (t[1], t[0]))
+    tasks.sort(key=lambda t: (t[1], t[0]))  # interleave games so that slow games spread over the workers
     print(f"{len(tasks)} level tasks -> {out_p}", flush=True)
     ctx = mp.get_context("fork")
     with ctx.Pool(args.workers, maxtasksperchild=1) as pool, open(out_p, "a") as f:
@@ -475,10 +577,11 @@ def cmd_search(args) -> None:
             b = rec.get("bfs", {})
             rs = rec.get("random", [])
             print(f"{rec['game']} L{rec['level']}: {b.get('status', rec.get('error'))} len={b.get('length')} "
-                  f"base={rec.get('baseline')} depth={b.get('depth_done')} states={b.get('states')} "
-                  f"br={b.get('branch_cands')}/{b.get('branch_eff')} cost={b.get('online_cost_lo')}-{b.get('online_cost_hi')} "
-                  f"hud={rec.get('hud_px')} rand={sum(x['solved'] for x in rs)}/{len(rs)} ({rec['secs']}s, {rec.get('rss_mb')}MB)",
-                  flush=True)
+                  f"base={rec.get('baseline')} astra={rec.get('astra_actions')} depth={b.get('depth_done')} "
+                  f"states={b.get('states')} br={b.get('branch_cands')}/{b.get('branch_eff')} "
+                  f"cost={b.get('online_cost_lo')}-{b.get('online_cost_hi')} p1={b.get('probe1_cost')} "
+                  f"hud={rec.get('hud_px')} snap={b.get('snap_mode')} rand={sum(x['solved'] for x in rs)}/{len(rs)} "
+                  f"({rec['secs']}s, {rec.get('rss_mb')}MB)", flush=True)
 
 
 # ------------------------------------------------------------------------------------------------
@@ -586,8 +689,8 @@ def main(argv: list[str]) -> int:
     s = sub.add_parser("search")
     s.add_argument("--games", default="")
     s.add_argument("--levels", default="")
-    s.add_argument("--cap", type=float, default=90.0, help="BFS seconds per level")
-    s.add_argument("--rand-cap", type=float, default=20.0, help="random-play seconds per level (all runs)")
+    s.add_argument("--cap", type=float, default=60.0, help="BFS CPU seconds per level")
+    s.add_argument("--rand-cap", type=float, default=12.0, help="random-play CPU seconds per level (all runs)")
     s.add_argument("--rand-runs", type=int, default=5)
     s.add_argument("--rand-max", type=int, default=1500, help="max actions per random run")
     s.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2)))
