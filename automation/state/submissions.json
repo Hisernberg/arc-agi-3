@@ -1,0 +1,164 @@
+[
+ {
+  "ref": "56601358",
+  "fileName": "submission.parquet",
+  "date": "2026-09-27 07:01:30.380000",
+  "description": "Notebook taaf-flashnext-sheetu12b-0922 | Version 1",
+  "status": "SubmissionStatus.PENDING",
+  "publicScore": "",
+  "privateScore": ""
+ },
+ {
+  "ref": "56580276",
+  "fileName": "submission.parquet",
+  "date": "2026-09-26 13:20:05.623000",
+  "description": "v7 nooa-lite submit",
+  "status": "SubmissionStatus.COMPLETE",
+  "publicScore": "2.61",
+  "privateScore": ""
+ },
+ {
+  "ref": "56511336",
+  "fileName": "submission.parquet",
+  "date": "2026-09-24 04:11:38.453000",
+  "description": "",
+  "status": "SubmissionStatus.COMPLETE",
+  "publicScore": "2.57",
+  "privateScore": ""
+ },
+ {
+  "ref": "56495028",
+  "fileName": "submission.parquet",
+  "date": "2026-09-23 13:48:10.770000",
+  "description": "",
+  "status": "SubmissionStatus.COMPLETE",
+  "publicScore": "2.45",
+  "privateScore": ""
+ },
+ {
+  "ref": "56457762",
+  "fileName": "submission.parquet",
+  "date": "2026-09-22 07:48:57.903000",
+  "description": "",
+  "status": "SubmissionStatus.COMPLETE",
+  "publicScore": "3.85",
+  "privateScore": ""
+ },
+ {
+  "ref": "56419239",
+  "fileName": "submission.parquet",
+  "date": "2026-09-21 06:30:35.977000",
+  "description": "",
+  "status": "SubmissionStatus.COMPLETE",
+  "publicScore": "3.85",
+  "privateScore": ""
+ },
+ {
+  "ref": "56356987",
+  "fileName": "submission.parquet",
+  "date": "2026-09-19 11:06:47.397000",
+  "description": "duck-governor-v1 (v3) submit",
+  "status": "SubmissionStatus.COMPLETE",
+  "publicScore": "2.77",
+  "privateScore": ""
+ },
+ {
+  "ref": "56322197",
+  "fileName": "submission.parquet",
+  "date": "2026-09-18 05:56:55.257000",
+  "description": "Notebook Duck Qwen3.8 Anim Base 35c14d | Version 2",
+  "status": "SubmissionStatus.COMPLETE",
+  "publicScore": "3.45",
+  "privateScore": ""
+ },
+ {
+  "ref": "56298188",
+  "fileName": "submission.parquet",
+  "date": "2026-09-17 07:13:18.947000",
+  "description": "",
+  "status": "SubmissionStatus.COMPLETE",
+  "publicScore": "2.79",
+  "privateScore": ""
+ },
+ {
+  "ref": "56278466",
+  "fileName": "submission.parquet",
+  "date": "2026-09-16 12:25:32.830000",
+  "description": "Notebook Duck Qwen3.8 (Tuned) | Version 1",
+  "status": "SubmissionStatus.COMPLETE",
+  "publicScore": "3.34",
+  "privateScore": ""
+ },
+ {
+  "ref": "56256197",
+  "fileName": "submission.parquet",
+  "date": "2026-09-15 14:08:46.163000",
+  "description": "Notebook AGI Active Flash V9 | Version 1",
+  "status": "SubmissionStatus.COMPLETE",
+  "publicScore": "2.89",
+  "privateScore": ""
+ },
+ {
+  "ref": "56234165",
+  "fileName": "submission.parquet",
+  "date": "2026-09-14 15:25:09.090000",
+  "description": "",
+  "status": "SubmissionStatus.COMPLETE",
+  "publicScore": "3.28",
+  "privateScore": ""
+ },
+ {
+  "ref": "56211884",
+  "fileName": "submission.parquet",
+  "date": "2026-09-13 17:22:07.357000",
+  "description": "",
+  "status": "SubmissionStatus.COMPLETE",
+  "publicScore": "2.45",
+  "privateScore": ""
+ },
+ {
+  "ref": "56113392",
+  "fileName": "submission.parquet",
+  "date": "2026-09-09 04:23:27.653000",
+  "description": "",
+  "status": "SubmissionStatus.COMPLETE",
+  "publicScore": "1.79",
+  "privateScore": ""
+ },
+ {
+  "ref": "56083797",
+  "fileName": "submission.parquet",
+  "date": "2026-09-07 20:08:24.047000",
+  "description": "Notebook Duck Qwen3.8 Flash Next NVFP4 MTP | Version 6",
+  "status": "SubmissionStatus.COMPLETE",
+  "publicScore": "2.71",
+  "privateScore": ""
+ },
+ {
+  "ref": "56055594",
+  "fileName": "submission.parquet",
+  "date": "2026-09-06 12:59:45.353000",
+  "description": "",
+  "status": "SubmissionStatus.COMPLETE",
+  "publicScore": "2.59",
+  "privateScore": ""
+ },
+ {
+  "ref": "56026234",
+  "fileName": "submission.parquet",
+  "date": "2026-09-05 06:10:05.280000",
+  "description": "",
+  "status": "SubmissionStatus.COMPLETE",
+  "publicScore": "2.93",
+  "privateScore": ""
+ },
+ {
+  "ref": "56017513",
+  "fileName": "submission.parquet",
+  "date": "2026-09-04 17:49:49.857000",
+  "description": "",
+  "status": "SubmissionStatus.COMPLETE",
+  "publicScore": "2.89",
+  "privateScore": ""
+ }
+]
