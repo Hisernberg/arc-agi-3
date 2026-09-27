@@ -1010,9 +1010,11 @@ def rank_click_candidates(seg: Segmentation, hud_mask: Optional[np.ndarray] = No
     composite are penalised. History: types whose clicks changed something (``live``) come first with
     all their instances, same-shape objects of another colour get a boost (``live_shapes``: toggles often
     recolour). A clicked instance that did nothing (``dead_inst``, keyed (type, r0, c0)) sinks at once;
-    its whole type sinks after two dead clicks (one if it has a single instance), unless it was ever
-    live - the same type can play different roles (reference picture vs board). Untested instances of
-    one type are interleaved with other types (2nd instance -0.9, 3rd -1.8, ...). One background
+    its whole type sinks after max(2, m/3) dead clicks (one if it has a single instance), unless it
+    was ever live - the same type can play different roles (reference picture vs board). Instances of a
+    live type are ordered by distance to the positions where clicks on it worked (``live_pos``); instances
+    of an untested type by farthest-point sampling (probe different regions first) and interleaved with
+    other types (2nd instance -0.9, 3rd -1.8, ...). One background
     (empty-space) candidate is appended (placed after live types if empty-space clicks worked before)."""
     dead = dead or Counter()
     live = live or Counter()

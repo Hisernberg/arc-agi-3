@@ -2037,6 +2037,15 @@ class ToolAgent:
         return trimmed
 
     def _persistent_history_messages(self, messages: list[dict[str, Any]], *, tools: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+        if messages and patches.enabled("M1_THINK"):
+            # [DUCK-PATCH M1] carried history keeps only the newest K turns' reasoning, stripped
+            # BEFORE trimming so the budget is not spent on reasoning that is dropped anyway.
+            keep = max(0, patches.int_setting("M1_THINK_KEEP", _M1_THINK_KEEP_DEFAULT))
+            messages = [messages[0], *_strip_history_reasoning(messages[1:], keep=keep)]
+        if messages and patches.enabled("M2_FACTS"):
+            # [DUCK-PATCH M2] old turn prompts keep only their per-turn header: the static
+            # instructions and the facts block are re-sent fresh in the newest prompt.
+            messages = [messages[0], *_compact_history_prompts(messages[1:])]
         trimmed = self._trim_messages_for_context(messages, tools=tools)
         if not trimmed:
             return []
@@ -2070,13 +2079,22 @@ class ToolAgent:
         tools: list[dict[str, Any]] | None = None,
         preserve_recent: int = 1,
         extra_safety_tokens: int = 0,
+        protect: dict[str, Any] | None = None,
     ) -> list[dict[str, Any]]:
         if not messages:
             return []
         system_message = messages[0]
         history = list(messages[1:])
         preserve_recent = max(0, preserve_recent)
-        budget_tokens = max(1, self._context_budget_tokens - max(0, extra_safety_tokens))
+        if protect is not None and patches.enabled("M2_FACTS"):
+            # [DUCK-PATCH M2] never evict the current turn's prompt (it carries the facts block and
+            # the current board) nor anything after it; with the smaller budget a long in-flight
+            # turn could otherwise push it out.
+            for index, message in enumerate(history):
+                if message is protect:
+                    preserve_recent = max(preserve_recent, len(history) - index)
+                    break
+        budget_tokens = max(1, self._effective_budget_tokens() - max(0, extra_safety_tokens))
         while history and self._estimate_request_input_tokens([system_message, *history], tools=tools) > budget_tokens:
             if not self._drop_oldest_history_block(history, preserve_recent=preserve_recent):
                 break
@@ -2118,6 +2136,9 @@ class ToolAgent:
         analyzer_log = transcript_path or (state_path.parent / f"{state_path.stem}_analyzer.txt")
         prompt_log = _resolve_prompt_log_path(state_path)
         current_frame, history_entries = load_runtime_state(state_path)
+        if patches.enabled("M2_FACTS"):
+            # [DUCK-PATCH M2] fold newly executed actions (real before/after frames) into the ledger.
+            self._facts_ledger().ingest(history_entries)
         user_prompt = self._build_user_prompt(
             action_num,
             valid_actions=valid_actions,
@@ -2147,8 +2168,9 @@ class ToolAgent:
 
         previous_history_messages = list(self._history_messages)
         preserve_history = True
+        turn_prompt_message = self._build_user_message(user_prompt, current_frame)
         messages: list[dict[str, Any]] = self._trim_messages_for_context(
-            [{"role": "system", "content": self._system_prompt}, *self._history_messages, self._build_user_message(user_prompt, current_frame)],
+            [{"role": "system", "content": self._system_prompt}, *self._history_messages, turn_prompt_message],
             tools=self._tools(state_path),
             preserve_recent=1,
         )
@@ -2181,7 +2203,7 @@ class ToolAgent:
                 turn_count += 1
                 tools = self._tools(state_path)
                 tool_choice = _request_tool_choice(tools)
-                messages = self._trim_messages_for_context(messages, tools=tools)
+                messages = self._trim_messages_for_context(messages, tools=tools, protect=turn_prompt_message)
                 latest_request_messages = json.loads(json.dumps(messages))
                 latest_request_tools = json.loads(json.dumps(tools))
                 latest_request_tool_choice = tool_choice
@@ -2426,7 +2448,7 @@ class ToolAgent:
             f"base_url: {self._model.base_url}\n"
             f"max_output_tokens: {self._max_output_tokens if self._max_output_tokens is not None else 'server default'}\n"
             f"reply_reserve_tokens: {self._reply_reserve_tokens}\n"
-            f"context_budget_tokens: {self._context_budget_tokens}\n"
+            f"context_budget_tokens: {self._effective_budget_tokens()}\n"
             f"request_safety_margin_tokens: {self._request_safety_margin_tokens}\n"
             f"tool_output_tokens: {self._tool_output_tokens}\n"
             f"yield_seconds: {self._yield_seconds if self._yield_seconds is not None else 'disabled'}\n"
