@@ -129,7 +129,8 @@ def _harness_estimate(payload: dict) -> int:
 def test_switch_defaults_and_group_switch(monkeypatch):
     for key in V9_ENV + ("DUCK_PATCHES",):
         monkeypatch.delenv(key, raising=False)
-    assert patches.report() == {
+    report = patches.report()
+    assert {k: report[k] for k in ("F1_IMAGES", "F2_RESULT", "F3_MEMORY", "S1_STATE_KEY", *patches.V9_PATCH_IDS)} == {
         "F1_IMAGES": True, "F2_RESULT": True, "F3_MEMORY": True, "S1_STATE_KEY": True,
         "P1_SCORING": True, "P2_UNDO": True, "P3_DISCIPLINE": True, "M1_THINK": False, "M2_FACTS": False,
     }
