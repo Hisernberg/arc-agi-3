@@ -504,6 +504,21 @@ class ActionChannel:
     def _same_state(self, a: np.ndarray, b: np.ndarray) -> bool:
         return not bool(((a != b) & ~self.P.hud_mask()).any())
 
+    def _exact_hash(self, frame: Optional[np.ndarray] = None) -> str:
+        f = self.obs.frame if frame is None else frame
+        return "none" if f is None else "x" + masked_hash(f, None, self.obs.levels_completed)
+
+    def _budget_nearly_out(self, frame: Optional[np.ndarray]) -> bool:
+        """True when a detected budget/timer bar has (almost) no 'remaining'-colour cells left, i.e. a
+        GAME_OVER now is probably budget exhaustion rather than caused by the action itself."""
+        if frame is None:
+            return False
+        for bar in self.P.hud.bars:
+            reg = bar.region()
+            if int((np.asarray(frame)[reg] == bar.a).sum()) <= 3 * max(1, bar.hi - bar.lo + 1):
+                return True
+        return False
+
     def _hash(self, frame: Optional[np.ndarray] = None) -> str:
         f = self.obs.frame if frame is None else frame
         if f is None:
@@ -540,9 +555,10 @@ class ActionChannel:
         if self.guard_unavailable and self.obs.available_actions and aid not in self.obs.available_actions:
             return f"ACTION{aid} not available {self.obs.available_actions}"
         h = self._hash()
+        he = self._exact_hash()
         for k in self.action_keys(a):
             mk = (self.level, h, k)
-            if self.guard_deaths and mk in self.death_mem:
+            if self.guard_deaths and (mk in self.death_mem or (self.level, he, k) in self.death_mem):
                 return "known GAME_OVER transition"
             if self.guard_noops and (self.noop_mem[mk] >= 1 or self.anim_noop_mem[mk] >= self.animated_noop_repeats):
                 return "known no-op here"
@@ -625,8 +641,14 @@ class ActionChannel:
             self.attempt = Attempt(self.level, self._frame_copy())
             return
         if obs.state == "GAME_OVER":
+            # exact key always; HUD-masked key only when the death is not plausibly budget exhaustion
+            # (with the timer masked, a budget death would otherwise ban a harmless action forever)
+            he = "x" + masked_hash(prev_obs.frame, None, lvl) if prev_obs.frame is not None else "none"
+            budget = self._budget_nearly_out(prev_obs.frame)
             for k in keys:
-                self.death_mem.add((lvl, h_before, k))
+                self.death_mem.add((lvl, he, k))
+                if not budget:
+                    self.death_mem.add((lvl, h_before, k))
             self._close_attempt("game_over")
             self.attempt = Attempt(lvl, self._frame_copy())  # placeholder until the RESET
             return

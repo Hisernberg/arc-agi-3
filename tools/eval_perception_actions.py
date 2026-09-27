@@ -124,19 +124,20 @@ def replay_click_ranks(rep: dict) -> list[dict]:
             info = {"bg": comp is None or comp.bg, "rank": None, "rank_fresh": None, "type_rank": None,
                     "n_cands": len(cands), "n_types": len({c.ctype for c in cands})}
             if comp is not None and not comp.bg:
+                grp = seg.group_of(comp.id)
                 for i, c in enumerate(cands):
-                    if c.comp.id == comp.id:
+                    if comp.id in c.comp.members:
                         info["rank"] = i
                         break
                 for i, c in enumerate(fresh):
-                    if c.comp.id == comp.id:
+                    if comp.id in c.comp.members:
                         info["rank_fresh"] = i
                         break
                 types = []
                 for c in cands:
                     if c.ctype not in types:
                         types.append(c.ctype)
-                info["type_rank"] = types.index(comp.ctype) if comp.ctype in types else None
+                info["type_rank"] = types.index(grp.ctype) if grp.ctype in types else None
         pc = per.observe(prev, st["frames"] or [st["frame"]], a, level=st["levels"], state=st["state"])
         if info is not None:
             info["effective"] = (not pc.noop) or st["levels"] > lv
@@ -187,6 +188,7 @@ def rollout_eval(game: str, n_steps: int = 300, seed: int = 0, click_every: int 
             ch.step(a, force=True)
     res: dict[str, Any] = defaultdict(float)
     res["game"] = game
+    res["blocked"] = 0
     toks, ms = [], []
     hud_changed_gt = hud_masked_gt = masked_total = masked_outside = 0
     gt_noop_steps = our_noop_on_gt = our_noop_steps = false_noop = 0
@@ -242,11 +244,15 @@ def rollout_eval(game: str, n_steps: int = 300, seed: int = 0, click_every: int 
             o = c.step(6, x=a0[1], y=a0[2]) if a0[0] == 6 else c.step(a0[0])
             guard_checked += 1
             if g == "known no-op here":
-                bad = o.levels_completed != env.levels_completed or o.state != env.state or \
-                    _changed_outside(env.frame, o.frame, gtm)
+                # a refused no-op that would have ended the game (budget exhausted) is a saving, not an error
+                bad = o.levels_completed != env.levels_completed or (
+                    o.state != "GAME_OVER" and _changed_outside(env.frame, o.frame, gtm))
             else:
                 bad = o.state != "GAME_OVER"
             guard_false += bool(bad)
+            if bad and os.environ.get("EVAL_DEBUG"):
+                print("FALSE REFUSAL", game, t, g, act, np.argwhere((env.frame != o.frame) & ~gtm)[:8].tolist(),
+                      o.state, len(o.frames))
         prev = ch.frame.copy()
         prev_lv = ch.level
         spr_before = _sprites(env)
@@ -286,11 +292,10 @@ def rollout_eval(game: str, n_steps: int = 300, seed: int = 0, click_every: int 
             ours = per.avatar.groups(per.seg(cur))
             if ours and first_avatar is None:
                 first_avatar = t
-            if gt_ids and ours:
+            boxes = [_sprite_display_bbox(env, spr_after[s]) for s in gt_ids if s in spr_after]
+            if boxes and ours:  # (sprite objects are re-created on level reset: no GT until re-learned)
                 avatar_checks += 1
-                boxes = [_sprite_display_bbox(env, spr_after[s]) for s in gt_ids if s in spr_after]
-                hit = any(_overlap(bb, ob) for _, ob in ours for bb in boxes)
-                avatar_hits += hit
+                avatar_hits += any(_overlap(bb, ob) for _, ob in ours for bb in boxes)
     acc = ch.accounting()
     res.update({
         "steps": len(toks), "tokens_p50": statistics.median(toks) if toks else 0,
@@ -362,8 +367,9 @@ def _click_eval(env, per, gtm, rng, stats, k_eval: int) -> None:
     top = cands[:max(k_eval, 20)]
     cand_eff = [effect(c.x, c.y) for c in top]
     for comp, key in gt_eff:
-        ids = [c.comp.id for c in cands]
-        rank = ids.index(comp.id) if comp is not None and comp.id in ids else None
+        rank = None
+        if comp is not None:
+            rank = next((i for i, c in enumerate(cands) if comp.id in c.comp.members), None)
         stats["obj_rank"].append(rank)
         stats["bg_target"].append(comp is None or comp.bg)
         eff_rank = next((i for i, (e, kk) in enumerate(cand_eff) if e and kk == key), None)

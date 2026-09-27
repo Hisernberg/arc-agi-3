@@ -1445,10 +1445,8 @@ async def run_bench_async(cfg: BenchConfig) -> dict[str, Any]:
         if not model:
             raise RuntimeError(f"no model at {cfg.base_url}/models and --model not given")
         model_info.setdefault("id", model)
-        est = TokenEstimator(header["tools"])
         agents = [Agent(i, games[i % len(games)], len(games), header, cfg, model, TokenEstimator(header["tools"]))
                   for i in range(cfg.agents)]
-        del est
         reqs: list[ReqRecord] = []
         turns: list[TurnRecord] = []
         stop = asyncio.Event()

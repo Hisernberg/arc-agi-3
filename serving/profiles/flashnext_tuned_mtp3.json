@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "name": "flashnext_tuned_mtp3",
-  "description": "MTP3 variant of the tuned profile. With MTP the weights are 81.8 GiB, so KV stays at the proven 5 GiB bf16 (~105k tokens); 11 GiB KV + MTP would leave ~1.6 GiB headroom (amanatar's 16 GB KV + MTP failed to start). Prefix caching ON, 16k context, 12 seqs.",
+  "description": "MTP3 variant: with MTP the weights are 81.8 GiB, so KV stays at the proven 5 GiB bf16 (~105k tokens); KV >= 11 GiB + MTP leaves <= 1.6 GiB headroom (16 GiB + MTP failed setup, amanatar v40 / Thuitanium). Prefix caching ON, 16k context, 12 seqs.",
   "runtime": {
     "kind": "flashnext_dev",
     "vllm_version": "0.1.dev20073+g8e685d198 (docker vllm/vllm-openai:qwen38-flash-next, extracted from Kaggle dataset layers)",
@@ -54,17 +54,28 @@
     "images_in_history": 2,
     "yield_seconds": 60
   },
+  "harness_env": {
+    "LOCAL_ANALYZER_CONTEXT_WINDOW": "16384",
+    "LOCAL_ANALYZER_MODEL_ID": "Qwen/Qwen3.8-Flash-Next-NVFP4",
+    "INFERENCE_ANALYZER_MODEL": "Qwen/Qwen3.8-Flash-Next-NVFP4",
+    "LOCAL_ANALYZER_BASE_URL": "http://127.0.0.1:1234/v1",
+    "OPENAI_BASE_URL": "http://127.0.0.1:1234/v1",
+    "LOCAL_ANALYZER_MAX_OUTPUT": "0"
+  },
   "startup": {"timeout_s": 1500, "expected_s": 560},
   "memory": {
+    "gpu_free_before_load_gib": 94.43,
     "weights_gib": 81.8,
-    "kv_gib": 5.0,
+    "kv_gib": 5,
     "kv_dtype": "bfloat16",
-    "kv_tokens_reported_at_32k_run": 105202,
-    "headroom_gib": 7.6
+    "kv_tokens_estimate": 105200,
+    "headroom_gib": 7.63,
+    "baseline_headroom_gib": 7.63
   },
   "fallback": null,
   "evidence": [
-    "09-22 MTP3 acceptance 59.7 % (mean length 2.7)",
-    "vLLM recipe: MTP made throughput worse on H100 (36 % acceptance)"
-  ]
+    "09-22: MTP3 acceptance 59.7 % (mean length 2.7)",
+    "vLLM Flash-Next recipe: MTP made throughput worse on H100 (36 % acceptance)"
+  ],
+  "notes": "--kv-cache-dtype fp8 is impossible for Flash-Next on this runtime: vllm/models/qwen3_8_flash_next/nvidia/qsa.py raises NotImplementedError('Qwen3.8-Flash-Next QSA requires a BF16 main KV cache')."
 }

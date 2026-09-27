@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "name": "flashnext_tuned_ngram",
-  "description": "Optional: flashnext_tuned + GPU n-gram speculation (no draft weights). Flash-Next allows spec methods {mtp, ngram, ngram_gpu}; --async-scheduling rejects plain 'ngram', so 'ngram_gpu' is used.",
+  "name": "flashnext_nomtp_kv12_seqs28",
+  "description": "Grid: MTP off, 12 GiB bf16 KV, 28 seqs, prefix caching OFF, 16k context.",
   "runtime": {
     "kind": "flashnext_dev",
     "vllm_version": "0.1.dev20073+g8e685d198 (docker vllm/vllm-openai:qwen38-flash-next, extracted from Kaggle dataset layers)",
@@ -34,16 +34,11 @@
     "--async-scheduling",
     "--enable-chunked-prefill",
     ["--max-cudagraph-capture-size", "32"],
-    "--enable-prefix-caching",
-    ["--mamba-cache-mode", "align"],
+    "--no-enable-prefix-caching",
     "--enable-auto-tool-choice",
     ["--tool-call-parser", "qwen3_coder"],
     ["--reasoning-parser", "qwen3"],
     ["--chat-template", "{model_path}/chat_template.jinja"],
-    [
-      "--speculative-config",
-      {"method": "ngram_gpu", "num_speculative_tokens": 3, "prompt_lookup_max": 4, "prompt_lookup_min": 2}
-    ],
     "--no-enable-log-requests",
     "--disable-uvicorn-access-log",
     ["--uvicorn-log-level", "info"]
@@ -75,9 +70,7 @@
     "headroom_gib": 8.13,
     "baseline_headroom_gib": 7.63
   },
-  "fallback": null,
-  "evidence": [
-    "runtime source: model_executor/models/config.py (Flash-Next spec methods), config/vllm.py (async scheduling)"
-  ],
+  "fallback": "flashnext_nomtp_kv7_seqs20",
+  "evidence": ["research/10 §5.3 (Thuitanium: MTP off frees 7.5 GiB; KV 7 GiB/28 seqs = 722 tok/s)"],
   "notes": "--kv-cache-dtype fp8 is impossible for Flash-Next on this runtime: vllm/models/qwen3_8_flash_next/nvidia/qsa.py raises NotImplementedError('Qwen3.8-Flash-Next QSA requires a BF16 main KV cache')."
 }

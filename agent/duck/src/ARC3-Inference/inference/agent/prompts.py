@@ -112,3 +112,53 @@ COMPACT_TOOL_SESSION_ADDENDUM = (
     "- Tool responses are capped to about {tool_output_tokens} tokens. If a response is cut off, the tool result will tell you that.\n"
     "- Keep code snippets short and purpose-built rather than dumping large frameworks into one call.\n"
 )
+
+# ---------------------------------------------------------------------------------------------
+# [DUCK-PATCH P1/P2/P3] prompt v9 (B07). Wired in tool_agent._build_system_prompt /
+# _build_user_prompt behind patches.enabled(...); with the switches off the prompts above are
+# sent unchanged. System-prompt growth is capped at +300 tokens (tests/test_duck_prompt_memory.py).
+# ---------------------------------------------------------------------------------------------
+
+# P1 replaces this GAME_OVERVIEW_ADDENDUM line (it contradicts the real scoring: depth > efficiency).
+OPTIMIZE_ACTIONS_LINE = "- Optimize for as few in-game actions as possible while still being reliable.\n"
+
+# P1: the true scoring rule (arc_agi 0.9.8 scorecard) + how to use the per-turn game clock.
+SCORING_RULE_V9 = (
+    "- Scoring: a cleared level scores min(1.15, (human_actions / your_actions)^2), an uncleared level 0, "
+    "and level k has weight k. Every action on a level you clear counts (RESET, UNDO and dead clicks too); "
+    "actions on a level you never clear cost nothing. Depth beats efficiency: one more cleared level is worth "
+    "far more than saved actions. Probe until the mechanic is understood, then execute the shortest reliable "
+    "sequence.\n"
+    "- Each turn shows the game clock. Pace yourself; after several failed hypotheses on a level, switch to a "
+    "different kind of hypothesis.\n"
+)
+
+# P3: reset discipline, verify-why-you-won, no video-game mapping, visible world-model updates.
+PLAY_DISCIPLINE_ADDENDUM_V9 = (
+    "\n\nPlay discipline:\n"
+    "- RESET restarts the level and costs an action: never RESET at the start of a level; use it only when "
+    "the level is dead-ended.\n"
+    "- After clearing a level, first state what cleared it (which action and effect) and verify that on the "
+    "new board before relying on it.\n"
+    "- Do not map the game onto known video games; infer rules only from observed effects.\n"
+    "- Only labelled notes in your visible reply (`World model:`, `Plan:`, ...) are carried to later turns; "
+    "thinking is dropped as history is trimmed. Write your updates there before each tool call.\n"
+)
+
+# P2 (user prompt, only when UNDO is a valid action).
+UNDO_LINE_V9 = (
+    "UNDO reverts your previous action and costs one action; prefer it over RESET to take back a single bad move."
+)
+
+# P3 (user prompt): replaces the optional-prefix line so world-model updates land in visible content.
+VISIBLE_NOTES_LINE_V9 = (
+    "Before each tool call, write your revised notes as visible text (not only in thinking), short, with the "
+    "prefixes `World model:`, `Goal model:`, `Action model:`, `Recent findings:`, `Open questions:`, `Plan:`, "
+    "and `Cross-level notes:`. Only these visible notes are carried to the next turn."
+)
+
+# P3 (user prompt, on the first turn after a level transition).
+LEVEL_CLEARED_LINE_V9 = (
+    "A level was just cleared: first write `Recent findings:` saying which action and effect cleared it, then "
+    "check whether that still holds on this board before acting."
+)

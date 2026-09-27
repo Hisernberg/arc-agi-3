@@ -1,7 +1,7 @@
 {
   "schema": 1,
-  "name": "flashnext_tuned_ngram",
-  "description": "Optional: flashnext_tuned + GPU n-gram speculation (no draft weights). Flash-Next allows spec methods {mtp, ngram, ngram_gpu}; --async-scheduling rejects plain 'ngram', so 'ngram_gpu' is used.",
+  "name": "flashnext_nomtp_kv12_seqs28_pc_ctx32k",
+  "description": "Control for flashnext_tuned with the 09-22 32k context: separates the serving gain from the shorter-prompt gain.",
   "runtime": {
     "kind": "flashnext_dev",
     "vllm_version": "0.1.dev20073+g8e685d198 (docker vllm/vllm-openai:qwen38-flash-next, extracted from Kaggle dataset layers)",
@@ -28,7 +28,7 @@
     ["--tensor-parallel-size", "1"],
     ["--distributed-executor-backend", "mp"],
     ["--kv-cache-memory-bytes", "12884901888"],
-    ["--max-model-len", "16384"],
+    ["--max-model-len", "32768"],
     ["--max-num-seqs", "28"],
     ["--max-num-batched-tokens", "8192"],
     "--async-scheduling",
@@ -40,17 +40,13 @@
     ["--tool-call-parser", "qwen3_coder"],
     ["--reasoning-parser", "qwen3"],
     ["--chat-template", "{model_path}/chat_template.jinja"],
-    [
-      "--speculative-config",
-      {"method": "ngram_gpu", "num_speculative_tokens": 3, "prompt_lookup_max": 4, "prompt_lookup_min": 2}
-    ],
     "--no-enable-log-requests",
     "--disable-uvicorn-access-log",
     ["--uvicorn-log-level", "info"]
   ],
   "env": {},
   "client": {
-    "context_window": 16384,
+    "context_window": 32768,
     "safety_margin": 6144,
     "reply_reserve": 512,
     "max_tokens": null,
@@ -58,7 +54,7 @@
     "yield_seconds": 60
   },
   "harness_env": {
-    "LOCAL_ANALYZER_CONTEXT_WINDOW": "16384",
+    "LOCAL_ANALYZER_CONTEXT_WINDOW": "32768",
     "LOCAL_ANALYZER_MODEL_ID": "Qwen/Qwen3.8-Flash-Next-NVFP4",
     "INFERENCE_ANALYZER_MODEL": "Qwen/Qwen3.8-Flash-Next-NVFP4",
     "LOCAL_ANALYZER_BASE_URL": "http://127.0.0.1:1234/v1",
@@ -76,8 +72,6 @@
     "baseline_headroom_gib": 7.63
   },
   "fallback": null,
-  "evidence": [
-    "runtime source: model_executor/models/config.py (Flash-Next spec methods), config/vllm.py (async scheduling)"
-  ],
+  "evidence": [],
   "notes": "--kv-cache-dtype fp8 is impossible for Flash-Next on this runtime: vllm/models/qwen3_8_flash_next/nvidia/qsa.py raises NotImplementedError('Qwen3.8-Flash-Next QSA requires a BF16 main KV cache')."
 }

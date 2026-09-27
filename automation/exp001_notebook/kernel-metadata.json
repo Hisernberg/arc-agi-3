@@ -1,0 +1,29 @@
+{
+  "id": "kragglenote2forwork/arc3-exp001-serving-ab",
+  "title": "arc3-exp001-serving-ab",
+  "code_file": "arc3-exp001-serving-ab.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "enable_internet": false,
+  "keywords": [],
+  "dataset_sources": [
+    "kragglenote2forwork/arc3-serving-kit",
+    "keithtyser/duck-qwen38-nvfp4-mtp-vllm-smoke-v1",
+    "keithtyser/qwen38-flash-next-vllm-nvfp4-runtime-v1",
+    "driessmit1/arc3-vllm-h100-wheelhouse-v3",
+    "keithtyser/taaf-duck-qwen38-serving-v1"
+  ],
+  "kernel_sources": [],
+  "competition_sources": [
+    "arc-prize-2026-arc-agi-3"
+  ],
+  "model_sources": [
+    "keithtyser/qwen3-8-flash-next-nvfp4/PyTorch/radixark-modelopt-fp4/1",
+    "foysalemonshanto/qwen3-8-27b-fp8-repacked-v1/PyTorch/hf-fp8/1"
+  ],
+  "docker_image": "gcr.io/kaggle-private-byod/python@sha256:37c64f7dd9c54116ecd1bcc88817c5469b88387388fade02bfa8bf3fc647d461",
+  "machine_shape": "NvidiaRtxPro6000"
+}

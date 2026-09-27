@@ -14,7 +14,7 @@
     "hf_repo": "Qwen/Qwen3.8-27B-FP8@017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
     "path_candidates": ["/kaggle/input/models/foysalemonshanto/qwen3-8-27b-fp8-repacked-v1/pytorch/hf-fp8/1"],
     "checkpoint_gib": 28.8,
-    "architecture": "Qwen3_5ForConditionalGeneration (48 GDN + 16 full-attention layers), mtp.safetensors present"
+    "architecture": "Qwen3_5ForConditionalGeneration (48 GDN + 16 full-attention layers); mtp.safetensors (477 MB) present"
   },
   "host": "127.0.0.1",
   "port": 1234,
@@ -47,17 +47,25 @@
     "images_in_history": 2,
     "yield_seconds": 60
   },
+  "harness_env": {
+    "LOCAL_ANALYZER_CONTEXT_WINDOW": "32768",
+    "LOCAL_ANALYZER_MODEL_ID": "Qwen/Qwen3.8-27B-FP8",
+    "INFERENCE_ANALYZER_MODEL": "Qwen/Qwen3.8-27B-FP8",
+    "LOCAL_ANALYZER_BASE_URL": "http://127.0.0.1:1234/v1",
+    "OPENAI_BASE_URL": "http://127.0.0.1:1234/v1",
+    "LOCAL_ANALYZER_MAX_OUTPUT": "0"
+  },
   "startup": {"timeout_s": 1200, "expected_s": 480},
   "memory": {
     "weights_gib": 28.5,
     "kv_gib_estimate": 52,
     "kv_dtype": "fp8_e4m3",
     "kv_tokens_reported_at_48.8GiB": 398272,
-    "note": "08-17 keithtyser run (vLLM 0.19, util 0.90, no MTP): 28.51 GiB weights, 48.8 GiB KV = 398,272 tokens (hybrid accounting), 25 running / 0 waiting, 439 tok/s mean decode."
+    "note": "08-17 keithtyser run (vLLM 0.19, util 0.90, no MTP): 28.51 GiB weights, 48.8 GiB KV = 398,272 tokens (hybrid accounting), 25 running / 0 waiting, 439 tok/s mean generation."
   },
   "fallback": "qwen27b_fp8_nomtp",
   "evidence": [
     "SCRATCH/kaggle/notebooks/keithtyser__duck-qwen3-8-27b-fp8/output/vllm-openai-server.log",
-    "vLLM v0.19.0 source: registry has Qwen3_5ForConditionalGeneration + Qwen3_5MTP; speculative 'mtp' maps qwen3_5 -> qwen3_5_mtp; no assertion against MTP + mamba 'align'"
+    "vLLM v0.19.0 source: registry has Qwen3_5ForConditionalGeneration + Qwen3_5MTP; 'mtp' maps qwen3_5 -> qwen3_5_mtp; MTP + mamba 'align' handled (no assertion), untested on this GPU"
   ]
 }

@@ -53,21 +53,31 @@
     "images_in_history": 2,
     "yield_seconds": 60
   },
+  "harness_env": {
+    "LOCAL_ANALYZER_CONTEXT_WINDOW": "32768",
+    "LOCAL_ANALYZER_MODEL_ID": "Qwen/Qwen3.8-Flash-Next-NVFP4",
+    "INFERENCE_ANALYZER_MODEL": "Qwen/Qwen3.8-Flash-Next-NVFP4",
+    "LOCAL_ANALYZER_BASE_URL": "http://127.0.0.1:1234/v1",
+    "OPENAI_BASE_URL": "http://127.0.0.1:1234/v1",
+    "LOCAL_ANALYZER_MAX_OUTPUT": "0"
+  },
   "startup": {"timeout_s": 1500, "expected_s": 560},
   "memory": {
     "gpu_free_before_load_gib": 94.43,
     "weights_gib": 81.8,
-    "kv_gib": 5.0,
+    "kv_gib": 5,
     "kv_dtype": "bfloat16",
+    "kv_tokens_estimate": 105200,
+    "headroom_gib": 7.63,
+    "baseline_headroom_gib": 7.63,
     "kv_tokens_reported": 105202,
-    "max_concurrency_at_32k": 3.21,
-    "headroom_gib": 7.6,
-    "note": "Measured in the 09-22 server log; FlashInfer MoE autotune hit a transient OOM with this headroom (recovered)."
+    "note": "FlashInfer MoE autotune hit a transient OOM at this headroom (recovered)."
   },
   "fallback": null,
   "evidence": [
     "SCRATCH/results/vllm-server-identity.json (argv)",
-    "SCRATCH/results/vllm-openai-server.log (81.8 GiB weights, 105,202 KV tokens)",
-    "analysis/01 (87 % of request time queued, 342 preemptions)"
-  ]
+    "SCRATCH/results/vllm-openai-server.log: 81.8 GiB weights, 105,202 KV tokens, 3.21x at 32k",
+    "analysis/01: 87 % of request time queued, 342 preemptions"
+  ],
+  "notes": "--kv-cache-dtype fp8 is impossible for Flash-Next on this runtime: vllm/models/qwen3_8_flash_next/nvidia/qsa.py raises NotImplementedError('Qwen3.8-Flash-Next QSA requires a BF16 main KV cache')."
 }
