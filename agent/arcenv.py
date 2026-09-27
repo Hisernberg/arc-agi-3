@@ -19,6 +19,7 @@ Quick API
     obs.frame                             # last 64x64 int8 frame (colors 0..15); obs.frames = all anim frames
     obs.state, obs.levels_completed, obs.win_levels, obs.available_actions
     child = env.clone()                   # independent exact copy (game + scorecard + counters)
+    env.valid_actions()                   # engine-internal meaningful actions/click targets (offline only)
     env.score()                           # official per-game score dict (0..100)
     score_from_level_actions([...], baseline, levels_completed)  # closed-form scorer
 
@@ -254,8 +255,10 @@ def max_score_if_levels(baseline: list[int], k: int) -> float:
     return 100.0 * sum(range(1, k + 1)) / sum(range(1, n + 1))
 
 
-def ascii_frame(frame: np.ndarray, crop: bool = False) -> str:
-    f = np.asarray(frame)
+def ascii_frame(frame: np.ndarray, crop: bool = False, every: int = 1) -> str:
+    """Hex-digit rendering (one char per pixel, colors 0-f). crop=True trims the dominant background,
+    every=k keeps every k-th row/column (e.g. 2 for 32x32 thumbnails of 2x-upscaled cameras)."""
+    f = np.asarray(frame)[::every, ::every]
     if crop:
         bg = np.bincount(f.ravel().astype(np.int64) % 16).argmax()
         ys, xs = np.nonzero(f != bg)
@@ -470,8 +473,8 @@ class ArcEnv:
                 "resets": env.resets, "level_scores": best.level_scores, "level_actions": best.level_actions,
                 "baseline": best.level_baseline_actions, "plays": len(env.runs)}
 
-    def render(self, crop: bool = False) -> str:
-        return ascii_frame(self.frame, crop=crop) if self.frame is not None else "<no frame>"
+    def render(self, crop: bool = False, every: int = 1) -> str:
+        return ascii_frame(self.frame, crop=crop, every=every) if self.frame is not None else "<no frame>"
 
 
 # --------------------------------------------------------------------------------------------

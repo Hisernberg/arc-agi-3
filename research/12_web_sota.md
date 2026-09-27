@@ -19,8 +19,8 @@ The layout is listed at the end. Tags: **[V]** means I verified it against code 
    are scored in the same run, at submission time. Competition mode allows **one `make` per game**,
    and a **game reset is turned into a level reset**. [Q]
 3. The Kaggle LB on 09-27: Tufa 27.29, Lord Han Solo 20.80, Tong Hui Kang 20.53, Yi-Chia Chen 18.80,
-   Daniel Franzen 16.68, NVARC3 16.07. Almost every top team jumped between 09-06 and 09-26. Before
-   that, the whole board was below 5 (history in §2.3).
+   Daniel Franzen 16.68, NVARC3 16.07. Almost every top team jumped between 09-03 and 09-26. At the
+   end of August the top score was about 4.7 (history in §2.3).
 4. **No top-10 method is public.** The only open, top-tier lineage is the Tufa "Duck" REPL harness
    (June milestone; 1.21 LB at the time on Qwen3.6-27B). Tufa **will not** open-source for Milestone 2
    (09-30). Tong Hui Kang (#3) and Lord Han Solo (#2) will share only under certain placements.
@@ -154,7 +154,7 @@ weight = level_index (1-based); score = Σ w·s / Σ w ; max_score = Σ_{s>0} w 
 | # | Team | Method | Model | LB then |
 |---|---|---|---|---|
 | 1 | **Tufa Labs, "The Duck"** (Bessis, Cottaar, Pressman, Smit, Tešnar, Viel) | LLM writes and runs Python in a REPL. Game state is exposed as variables (`current_frame.ascii`, `.segmentation`, `history`, `transitions`, `valid_actions`, `action()`). A 4×-upscaled image goes in every turn. A world-model note is carried across turns. **Eviction** keeps about a 32k input context (64k max). UNDO is hidden from the model. Hand-built tools *hurt*; the gains came from better base models plus multimodality. | Qwen3.6-27B FP8, vLLM | 1.21 (public-25 mean 1.60 ± 0.45 over 20 tries) |
-| 2 | Reki | A VLM as the policy: labelled frame images in, one JSON (what changed, plan, 1–4 actions) out; reflection memory about every 10 steps. numpy click heuristics prefer small, rare-colour, button-like shapes. A "dead-signature" rule stops clicking object types that never change anything. | Gemma-4-31B | ~0.9 |
+| 2 | Reki | A VLM as the policy: labelled frame images in, one JSON (what changed, plan, 1–4 actions) out; reflection memory about every 10 steps. numpy click heuristics prefer small, rare-colour, button-like shapes. A "dead-signature" rule stops clicking object types that never change anything. | Gemma-4-31B | 0.86–1.21 (exact figure not published) |
 | 3 | Md B. M. Murad, "forge" | Same as Reki inside a profile framework (generator + arbiter + confidence prompt). The best run had all extras **off**. | Gemma-4-31B | 0.86 |
 
 Sources: Tufa writeup https://www.kaggle.com/competitions/arc-prize-2026-arc-agi-3/discussion/717133
@@ -185,7 +185,7 @@ Kaggle API LB on 09-27, plus minute-level history from Tong Hui Kang's monitor
 | 2 | Lord Han Solo | 20.80 | 75 | 08-22 3.36 → 09-18 11.54 → 09-19 15.60 → 09-20 18.42 → 09-26 20.80 | Solo. Will share "if I make the top 3 in Milestone 2 among participants who have indicated their willingness to share". Nothing else is public. |
 | 3 | Tong Hui Kang | 20.53 | 85 | 08-23 2.24 → 09-16 8.72 → 09-21 10.78 → 09-24 15.02 → 09-25 20.53 | Won the Nemotron reasoning progress prize with LoRA via Tinker (his Kaggle notebooks: "Tinker submission", "Adapter validation"). His May autoresearch CNN policy on "ideal gameplay traces" of modified games did **not** beat random (blog: https://blog.huikang.dev/2026/05/31/autoresearch-hackathon.html). Intends to share only if he finishes 1st. |
 | 4 | Yi-Chia Chen | 18.80 | **13** | 09-17 4.79 → **09-19 12.88** → 09-25 18.80 | Nothing public. Very few submissions, so heavy offline iteration. |
-| 5 | Daniel Franzen | 16.68 | 83 | 09-05 7.63 → 09-16 11.59 → 09-24 16.68 | Of "the ARChitects" (ARC Prize 2024 winner: test-time training, product-of-experts). No ARC-3 writeup found. |
+| 5 | Daniel Franzen | 16.68 | 83 | 09-05 7.63 → 09-16 11.59 → 09-24 16.68 | Presumably the Daniel Franzen of "the ARChitects" (ARC Prize 2024 winner: test-time training, product-of-experts). No ARC-3 writeup, repo or forum post found. [S] |
 | 6 | NVARC3 | 16.07 | 22 | 09-06 3.32 → 09-16 11.04 → 09-19 16.07 | NVIDIA KGMoN (CPMP / J-F Puget; rfbr). They won ARC Prize 2025 as NVARC. "We tried AVO style ideas and haven't seen them beat our current harness" (/737617). They open-source only at the end, and only with a gold medal. |
 | 7 | the last dance | 13.70 | 64 | 09-05 3.54 → 09-24 13.70 | — |
 | 8 | Third Intelligence | 12.31 | 58 | 09-02 3.97 → 09-26 12.31 | — |
@@ -361,6 +361,7 @@ Scores are self-reported.
 - Our 09-22 run under that profile (`SCRATCH/results/vllm-*`):
   - 1,045 requests, 20.5M prompt tokens vs 1.8M generated (11:1, so prefill-heavy).
   - **Queue time 152k of 175.5k s total latency (87%)**; 342 preemptions.
+  - GPU KV cache: 105,202 tokens, "maximum concurrency for 32,768 tokens per request: 3.21x".
   - MTP acceptance 59.7%; about 250 tok/s aggregate decode.
 - Pennyroyal (SGLang fork for SM120) on one RTX PRO 6000:
   - Flash-Next NVFP4: 182 tok/s C1, **446 tok/s C4**, 632 tok/s C8, 14.8k tok/s cold prefill at 64K.
@@ -398,8 +399,10 @@ Context: an AGENTFIX Duck fork on Flash-Next NVFP4, LB 3.85, target 18–20.
 
 1. **Fix serving throughput and queueing (highest EV, low research risk).** We are compute-bound: 87%
    of request time is queued, with preemptions and about 42 turns per game.
-   - (a) Right-size KV and seqs: PLE offload is already on, so raise `--kv-cache-memory-bytes` from
-     5 GiB as far as VRAM allows, try an FP8 KV cache, and align max-num-seqs with game concurrency.
+   - (a) Right-size KV and seqs. Our log shows PLE offload active, weights 81.8 GiB, 94.4 GiB
+     initially free, and KV fixed at 5.0 GiB. That is **105,202 KV tokens, only 3.2 concurrent 32k
+     requests**, with about 7 GiB unused. Raise `--kv-cache-memory-bytes`, try an FP8 KV cache
+     (`--kv-cache-dtype fp8`, roughly 2× the tokens), and align max-num-seqs with game concurrency.
    - (b) Enable prefix caching if vLLM supports it for this hybrid-attention model, or else evaluate
      the Pennyroyal SGLang build (radix + Mamba-state cache, 446–632 tok/s aggregate).
    - (c) Tune MTP tokens (2 vs 3) on real traffic.

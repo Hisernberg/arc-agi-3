@@ -65,7 +65,7 @@ already understands a game can hit the 115 cap per level. The whole difficulty i
 - **Actions**: ACTION1-4 move the selected object 1 cell (a vertical mirror only moves left/right, a horizontal
   one only up/down). ACTION5 cycles the selection. ACTION6 click selects the object under the cursor
   (pieces preferred over mirrors). ACTION7 undo: restores positions and costs an action, but not budget.
-  Moves and ACTION5 cost budget. Some pieces rotate 90° whenever their distance to their mirror
+  Moves and ACTION5 cost budget; clicks do not. Some pieces rotate 90° whenever their distance to their mirror
   changes (tags `0040`/`0044`). Some reflect only horizontally or only vertically.
 - **Win**: every target cell is covered by a piece or by a reflection. **Lose**: budget exhausted.
 - **Skill**: symmetry/reflection geometry, choosing which object to move.
@@ -161,7 +161,7 @@ already understands a game can hit the 115 cap per level. The whole difficulty i
 
 ### lf52 - Peg solitaire on moving platforms (click + arrows, 1-4,6,7)
 - **Levels 10**, baselines 32 81 60 71 205 148 244 109 164 225. Custom engine (6-px cells, scrolling).
-  Hidden move counter: lose at 64 (level 1), 320 (levels 2-5) or 640 (levels 6-10). Undo adds to it.
+  Hidden move counter (+1 per arrow or click): lose at 64 (level 1), 320 (levels 2-5) or 640 (levels 6-10).
 - **Actions**: ACTION6 on a peg shows up to 4 jump targets 2 cells away. ACTION6 on a target makes the peg jump
   over the neighbour. If the jumped peg has the **same color** it is captured (removed). Landing needs a
   platform tile. ACTION1-4 slide all movable platform blocks one cell, carrying the pegs on them (the camera
@@ -223,7 +223,8 @@ already understands a game can hit the 115 cap per level. The whole difficulty i
 ### s5i5 - Articulated robot arms (click only)
 - **Levels 8**, baselines 20 89 106 54 162 38 86 83. Budget 50 150 200 100 150 150 200 200.
 - **Mechanic**: colored segments form kinematic chains (children follow parents). A slider bar per color:
-  clicking its far half extends all segments of that color by one unit, the near half shrinks them.
+  clicking its second (right/bottom) half extends all segments of that color by one unit, the first half
+  shrinks them.
   Colored rotate buttons turn that color's segments 90° about their base. Moves causing overlaps are reverted.
 - **Win**: every target (`0087`) has an end effector (`0064`) on it. **Skill**: forward/inverse kinematics.
   BFS L1 = **13** (human 20).
@@ -244,7 +245,8 @@ already understands a game can hit the 115 cap per level. The whole difficulty i
 - **Actions**: ACTION1-4 walk 2 px (4 when enlarged). ACTION6 on the 3x3 rune grid toggles a cell. When the
   pattern equals a spell allowed in this level, it casts: vertical line = fire (burns obstacles ahead),
   diamond ring = enlarge x2, corner = swap/teleport *(inferred)*. Spell-book icons play a demo when
-  clicked. Levels 1-3 auto-play the demo on the **first action** (22 frames, no effect otherwise).
+  clicked. Level 1 auto-plays the demo on the **first action** (22 frames, no other effect); levels 1-3
+  pre-select the level's spell.
   Pickups refund mana.
 - **Win**: walk into the exit (it slides in). **Lose**: mana exceeded.
 - **Skill**: learn symbolic commands from a demonstration, then use them to remove obstacles.
@@ -259,7 +261,7 @@ already understands a game can hit the 115 cap per level. The whole difficulty i
   BFS L1 = **14** (human 61).
 
 ### sp80 - Water routing (keyboard_click, 1-6)
-- **Levels 6**, baselines 39 58 25 148 96 152. Step budget 30 45 100 120 100 120. The 4th failed pour loses.
+- **Levels 6**, baselines 39 58 25 148 96 152. Step budget 30 45 100 120 100 120. After 4 failed pours, the next pour loses.
 - **Actions**: ACTION6 selects a deflector bar. ACTION1-4 move it 1 cell (it keeps a margin around cups
   and the top rows). ACTION5 **pours**: water falls from the sources, splits left/right around bars, and
   diagonal deflectors send it sideways (22-frame simulation).
@@ -310,7 +312,7 @@ already understands a game can hit the 115 cap per level. The whole difficulty i
 - **Levels 7**, baselines 7 18 44 61 131 34 152. Budget 50 50 75 50 200 50 200.
 - **Mechanic**: liquid columns come in pairs. Clicking a pump (`0022`) moves one unit of liquid from one column
   to its partner (the surface moves by the level's gravity step of 2-3 px), and floats ride the surfaces.
-  Clicking a gate (`0004`) when the two sides line up transfers the floats across. The gravity direction differs per
+  Clicking a gate (`0004`) when the two sides line up swaps the floats across it. The gravity direction differs per
   level (down, up, left, right).
 - **Win**: every float sits level with the marker of its color. **Skill**: quantity/level balancing,
   conservation. BFS L1 = **3** (human 7).
