@@ -509,10 +509,21 @@ class Game:
     pool: list[str] = field(default_factory=list)  # recorded tool results, in order
 
 
+def resolve_pack_path(path: Path) -> Path:
+    """Kaggle datasets auto-decompress uploaded `.gz` files, so `x.jsonl.gz` may arrive as `x.jsonl` (and vice versa)."""
+    path = Path(path)
+    if path.exists():
+        return path
+    alt = path.with_suffix("") if path.suffix == ".gz" else path.with_name(path.name + ".gz")
+    if alt.exists():
+        return alt
+    raise FileNotFoundError(f"replay pack not found: {path} (also tried {alt})")
+
+
 def load_pack(path: Path) -> tuple[dict[str, Any], list[Game]]:
     header: dict[str, Any] | None = None
     games: list[Game] = []
-    with open_text(Path(path), "rt") as fh:
+    with open_text(resolve_pack_path(path), "rt") as fh:
         for line in fh:
             if not line.strip():
                 continue

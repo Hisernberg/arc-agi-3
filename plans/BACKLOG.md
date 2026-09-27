@@ -29,7 +29,7 @@ Sources of code:
 ## Pre-10-03 (CPU, before the first GPU day)
 | P | ID | Item | Done-when |
 |---|---|---|---|
-| 0 | P01 | Upload private Kaggle dataset `kragglenote2forwork/arc3-serving-kit` (`automation/exp001_notebook/build_kit.py`) for EXP-001 | dataset visible via `kaggle datasets files`; notebook metadata references it |
+| 0 | P01 | (DONE 09-27: v1+v2 private, 25 files verified) Upload private Kaggle dataset `kragglenote2forwork/arc3-serving-kit` (`automation/exp001_notebook/build_kit.py`) for EXP-001 | dataset visible via `kaggle datasets files`; notebook metadata references it |
 | 0 | P02 | Final preflight of `notebooks/hydra0/` (B09 preflight) + dry build; confirm quota refresh at 10-03 00:00 UTC | preflight green |
 | 1 | P03 | Decide EXP-001 order vs Hydra-0 on 10-03 (Hydra-0 smoke first — it doubles as the Flash-Next MTP-off startup check) | written in STATUS.md |
 

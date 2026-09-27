@@ -421,6 +421,7 @@ class Attempt:
     start: np.ndarray  # frame at the start of the attempt (level start or after RESET)
     steps: list = field(default_factory=list)  # list[StepRecord]
     end: str = "open"  # open | reset | game_over | won
+    budget_death: bool = False  # ended in GAME_OVER with the timer/budget bar (nearly) empty
 
 
 # ------------------------------------------------------------------------------------------------
@@ -655,6 +656,7 @@ class ActionChannel:
                 self.death_mem.add((lvl, he, k))
                 if not budget and (lvl, h_before, k) not in self.ok_mem:
                     self.death_mem.add((lvl, h_before, k))
+            self.attempt.budget_death = budget
             self._close_attempt("game_over")
             self.attempt = Attempt(lvl, self._frame_copy())  # placeholder until the RESET
             return
@@ -741,11 +743,13 @@ class ActionChannel:
         return recs
 
     def replay_prefix(self, n: Optional[int] = None, level: Optional[int] = None, skip_noops: bool = True,
-                      compress_loops: bool = False, verify: bool = True) -> BatchResult:
+                      compress_loops: Optional[bool] = None, verify: bool = True) -> BatchResult:
         """Re-execute the first ``n`` steps (default: all) of the known-good prefix of this level's last
         attempt. Must be called in the attempt's start state (i.e. right after the RESET that follows a
         GAME_OVER or a voluntary level reset). Every step is verified against the recorded post-step frame
-        (HUD masked); the replay halts at the first divergence. Guards are bypassed (the actions are known)."""
+        (HUD masked); the replay halts at the first divergence. Guards are bypassed (the actions are known).
+        ``compress_loops`` (cut revisited states) defaults to True only when the attempt died of budget
+        exhaustion - replaying all of it would walk straight back into the same budget death."""
         at = self.last_attempt(level)
         if at is None:
             return BatchResult([], True, "no recorded attempt for this level", 0)
@@ -753,12 +757,18 @@ class ActionChannel:
             return BatchResult([], True, f"{self.state}: RESET first", 0)
         if not self._same_state(self._frame_copy(), at.start):
             return BatchResult([], True, "not at the recorded start state of the attempt (RESET first)", 0)
+        if compress_loops is None:
+            compress_loops = at.budget_death
         recs = self.known_good_prefix(level, skip_noops, compress_loops)
         if n is not None:
             recs = recs[:n]
         plan = [(r.action, Expectation("frame", {"frame": r.frame_after}, "recorded state") if verify else None)
                 for r in recs]
-        return self.execute(plan, halt_on_mismatch=True, stop_on_level=True, force=True)
+        res = self.execute(plan, halt_on_mismatch=True, stop_on_level=True, force=True)
+        if at.budget_death and not res.halted:
+            res.reason = (f"done; the previous attempt ran out of budget after {len(at.steps)} actions "
+                          f"(replayed {res.executed}, state loops cut)")
+        return res
 
     def replay_solution(self, level: int) -> BatchResult:
         """Re-run the recorded winning action list of ``level`` (e.g. after a full restart)."""

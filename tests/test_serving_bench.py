@@ -343,3 +343,16 @@ def test_suite_with_fallback_on_mock(tmp_path: Path, small_pack: Path):
     assert statuses == [("broken", "startup_failed"), ("mock_cpu", "ok")]
     assert (out / "mock_cpu" / "report.json").exists() and (out / "exp001_summary.md").exists()
     assert "mock_cpu" in (out / "exp001_summary.md").read_text()
+
+
+def test_pack_path_survives_kaggle_gz_decompression(tmp_path):
+    """Kaggle datasets auto-decompress `.gz` uploads: `duck_0922.jsonl.gz` arrives as `duck_0922.jsonl`."""
+    import gzip
+    import shutil
+    import serving_bench as sb
+    src = sb.DEFAULT_PACK
+    plain = tmp_path / "duck_0922.jsonl"
+    with gzip.open(src, "rb") as fin, open(plain, "wb") as fout:
+        shutil.copyfileobj(fin, fout)
+    header, games = sb.load_pack(tmp_path / "duck_0922.jsonl.gz")   # the name the notebook passes
+    assert games and header is not None

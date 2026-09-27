@@ -341,10 +341,12 @@ class ProgressScheduler:
         self.running += 1
 
     def on_turn_end(self, gid: str, now: float, *, levels: int | None = None, won: bool = False,
-                    executed: bool = True) -> None:
+                    executed: bool = True, ready: bool = True) -> None:
         """Report a finished turn. `executed`: the turn executed at least one action (only those count towards
-        stagnation, so an LLM outage does not demote every game)."""
+        stagnation, so an LLM outage does not demote every game). `ready`: the game can be granted its next turn
+        right away (the gate passes False: its worker must come back to `acquire()` first)."""
         g = self.games[gid]
+        g.ready = ready
         if g.turn_started_at is None:
             return
         dur = max(0.0, now - g.turn_started_at)
@@ -382,7 +384,7 @@ class ProgressScheduler:
         """The harness ended a game on its own (win, action cap, crash) outside a turn."""
         g = self.games[gid]
         if g.turn_started_at is not None:
-            self.on_turn_end(gid, now, executed=False)
+            self.on_turn_end(gid, now, executed=False, ready=False)
         self._retire(g, now, reason)
 
     # ---- queries --------------------------------------------------------------------------------------------
@@ -497,7 +499,7 @@ class SchedulerGate:
     def release(self, gid: str, *, levels: int | None = None, won: bool = False, executed: bool = True) -> None:
         with self._cond:
             now = self._clock()
-            self.core.on_turn_end(gid, now, levels=levels, won=won, executed=executed)
+            self.core.on_turn_end(gid, now, levels=levels, won=won, executed=executed, ready=False)
             self._pump(now)
             self._cond.notify_all()
 
@@ -612,8 +614,6 @@ class ProgressPolicy(_Policy):
 
     def turn_end(self, gid, now, levels, won):
         self.core.on_turn_end(gid, now, levels=levels, won=won)
-        g = self.core.games[gid]
-        g.ready = True
 
     def stopped(self, now):
         return self.core.stopped is not None
