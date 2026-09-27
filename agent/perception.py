@@ -304,6 +304,7 @@ class Comp:
     shape: str  # colour-free translation-invariant shape hash
     ctype: str  # colour + shape hash ("object type")
     bg: bool = False  # background / large region (not an object)
+    members: tuple = ()  # for 8-connected groups: ids of the 4-connected components merged
 
     @property
     def h(self) -> int:
@@ -340,9 +341,54 @@ class Segmentation:
     def mask_of(self, cid: int) -> np.ndarray:
         return self.labels == cid
 
+    def groups(self) -> list[Comp]:
+        """8-connected same-colour groups of components (diagonal outlines/dotted rings become one
+        object). A group of one component equals that component (same ctype). Cached."""
+        if getattr(self, "_groups", None) is None:
+            self._build_groups()
+        return self._groups
 
-def _label_runs(g: np.ndarray):
-    """4-connected components via row runs + union-find. Returns (labels, run arrays, root ids)."""
+    def group_of(self, cid: int) -> Comp:
+        if getattr(self, "_groups", None) is None:
+            self._build_groups()
+        return self._groups[self._group_of[cid]]
+
+    def _build_groups(self) -> None:
+        lab8 = _label_runs(self.grid, conn8=True)[0]
+        g_of = {}
+        members: dict[int, list[int]] = {}
+        for c in self.comps:
+            k = int(lab8[c.r0, c.c0 + int(np.argmax(self.labels[c.r0, c.c0:c.c1 + 1] == c.id))])
+            members.setdefault(k, []).append(c.id)
+        groups: list[Comp] = []
+        for k, mem in members.items():
+            if len(mem) == 1:
+                c = self.comps[mem[0]]
+                grp = Comp(len(groups), c.color, c.n, c.r0, c.c0, c.r1, c.c1, c.cy, c.cx, c.shape, c.ctype, c.bg,
+                           (c.id,))
+            else:
+                cs_ = [self.comps[i] for i in mem]
+                n = sum(c.n for c in cs_)
+                r0, c0 = min(c.r0 for c in cs_), min(c.c0 for c in cs_)
+                r1, c1 = max(c.r1 for c in cs_), max(c.c1 for c in cs_)
+                crop = np.isin(self.labels[r0:r1 + 1, c0:c1 + 1], mem)
+                shp = _hash_bytes(bytes((r1 - r0 + 1, c1 - c0 + 1)) + np.packbits(crop).tobytes())
+                grp = Comp(len(groups), cs_[0].color, n, r0, c0, r1, c1, sum(c.cy * c.n for c in cs_) / n,
+                           sum(c.cx * c.n for c in cs_) / n, shp, f"{cs_[0].color}:{shp}", any(c.bg for c in cs_),
+                           tuple(sorted(mem)))
+            for i in mem:
+                g_of[i] = grp.id
+            groups.append(grp)
+        self._groups, self._group_of = groups, g_of
+
+    def group_mask(self, grp: Comp) -> np.ndarray:
+        crop = np.isin(self.labels[grp.r0:grp.r1 + 1, grp.c0:grp.c1 + 1], list(grp.members))
+        return crop
+
+
+def _label_runs(g: np.ndarray, conn8: bool = False):
+    """Same-colour connected components via row runs + union-find (4- or 8-connectivity).
+    Returns (labels, run rows, run starts, run ends, run colours, component of run, n components)."""
     Hh, Ww = g.shape
     starts = np.ones((Hh, Ww), bool)
     starts[:, 1:] = g[:, 1:] != g[:, :-1]
@@ -363,24 +409,23 @@ def _label_runs(g: np.ndarray):
             i = parent[i]
         return i
 
+    tol = 1 if conn8 else 0
     csl, cel, coll = cs.tolist(), ce.tolist(), col.tolist()
     for r in range(1, Hh):
-        i, iend = row_start[r], row_start[r + 1]
-        j, jend = row_start[r - 1], row_start[r]
-        while i < iend and j < jend:
-            if coll[i] == coll[j] and csl[i] <= cel[j] and csl[j] <= cel[i]:
-                ri, rj = find(i), find(j)
-                if ri != rj:
-                    if ri < rj:
-                        parent[rj] = ri
-                    else:
-                        parent[ri] = rj
-            if cel[i] < cel[j]:
-                i += 1
-            elif cel[j] < cel[i]:
-                j += 1
-            else:
-                i += 1
+        j0, jend = row_start[r - 1], row_start[r]
+        for i in range(row_start[r], row_start[r + 1]):
+            lo, hi, ci = csl[i] - tol, cel[i] + tol, coll[i]
+            while j0 < jend and cel[j0] < lo:
+                j0 += 1
+            j = j0
+            while j < jend and csl[j] <= hi:
+                if coll[j] == ci:
+                    ri, rj = find(i), find(j)
+                    if ri != rj:
+                        if ri < rj:
+                            parent[rj] = ri
+                        else:
+                            parent[ri] = rj
                 j += 1
     roots = [find(i) for i in range(nrun)]
     # components numbered in order of first run (reading order of top-left-most cell)
@@ -461,37 +506,52 @@ class ObjEvent:
         return self.after if self.after is not None else self.before
 
     def text(self) -> str:
+        """Compact: positions are (x,y) of the object's top-left cell after the event."""
         c = self.comp
         if self.kind == "moved":
             b, a = self.before, self.after
             dname = DIR_NAMES.get((int(np.sign(self.dx)), int(np.sign(self.dy)))) if (self.dx == 0 or self.dy == 0) else None
             dd = f"{dname} {max(abs(self.dx), abs(self.dy))}" if dname else f"({self.dx:+d},{self.dy:+d})"
-            return f"moved {b.short()} {dd} (x{b.c0},y{b.r0})->(x{a.c0},y{a.r0})"
+            return f"c{b.color} {b.w}x{b.h} {dd} to ({a.c0},{a.r0})"
         if self.kind == "recolored":
-            return f"recolor {c.w}x{c.h} c{self.color}>c{self.new_color} @(x{c.c0},y{c.r0})"
+            return f"c{self.color} {c.w}x{c.h} at ({c.c0},{c.r0}) now c{self.new_color}"
         if self.kind == "resized":
             b, a = self.before, self.after
             if (b.w, b.h) == (a.w, a.h):
-                return f"reshape c{self.color} {a.w}x{a.h} {b.n}>{a.n}px @(x{a.c0},y{a.r0})"
-            return f"resize c{self.color} {b.w}x{b.h}>{a.w}x{a.h} @(x{a.c0},y{a.r0})"
+                return f"c{self.color} {a.w}x{a.h} at ({a.c0},{a.r0}) reshaped {b.n}->{a.n}px"
+            return f"c{self.color} {b.w}x{b.h}->{a.w}x{a.h} at ({a.c0},{a.r0})"
         if self.kind == "spawned":
-            return f"new {c.short()} @(x{c.c0},y{c.r0})"
-        return f"gone {c.short()} @(x{c.c0},y{c.r0})"
+            return f"new c{c.color} {c.w}x{c.h} at ({c.c0},{c.r0})"
+        return f"gone c{c.color} {c.w}x{c.h} from ({c.c0},{c.r0})"
 
 
 def object_diff(seg_a: Segmentation, seg_b: Segmentation, changed: np.ndarray, max_events: int = 64) -> list[ObjEvent]:
     """Match the non-background components touched by the change mask between two segmentations."""
     if not changed.any():
         return []
-    la = np.unique(seg_a.labels[changed])
-    lb = np.unique(seg_b.labels[changed])
-    A = [seg_a.comps[i] for i in la.tolist() if not seg_a.comps[i].bg]
-    B = [seg_b.comps[i] for i in lb.tolist() if not seg_b.comps[i].bg]
-    if len(A) > 400 or len(B) > 400:  # texture explosion: skip object-level diff
+    la = [i for i in np.unique(seg_a.labels[changed]).tolist() if not seg_a.comps[i].bg]
+    lb = [i for i in np.unique(seg_b.labels[changed]).tolist() if not seg_b.comps[i].bg]
+    if len(la) > 400 or len(lb) > 400:  # texture explosion: skip object-level diff
         return []
+    # one expansion round: objects overlapping a touched object of the other frame (growth / shrink)
+    if lb:
+        la = sorted(set(la) | {i for i in np.unique(seg_a.labels[np.isin(seg_b.labels, lb)]).tolist()
+                               if not seg_a.comps[i].bg})
+    if la:
+        lb = sorted(set(lb) | {i for i in np.unique(seg_b.labels[np.isin(seg_a.labels, la)]).tolist()
+                               if not seg_b.comps[i].bg})
+    A = [seg_a.comps[i] for i in la]
+    B = [seg_b.comps[i] for i in lb]
     used_a: set[int] = set()
     used_b: set[int] = set()
     events: list[ObjEvent] = []
+    # 0) identical objects in both frames are unchanged
+    idx_b = {(c.ctype, c.r0, c.c0): c for c in B}
+    for a in A:
+        b = idx_b.get((a.ctype, a.r0, a.c0))
+        if b is not None and b.id not in used_b:
+            used_a.add(a.id)
+            used_b.add(b.id)
     # 1) identical type (colour+shape) at a different position -> moved (closest first)
     by_type_b: dict[str, list[Comp]] = defaultdict(list)
     for c in B:
@@ -567,6 +627,12 @@ class HudBar:
     end: int
     ticks: int = 1
     last_step: int = 0
+    edge: bool = False  # confirmed by the outermost-line rule (else by two ticks)
+    tick_px: int = 1  # largest tick seen (cells flipped by one action)
+
+    def remaining(self, frame: np.ndarray) -> int:
+        """Cells of the bar still showing the pre-tick colour (budget left, in cells)."""
+        return int((np.asarray(frame)[self.region()] == self.a).sum())
 
     def region(self) -> np.ndarray:
         m = np.zeros((H, W), bool)
@@ -591,17 +657,20 @@ class HudTracker:
     tick   = an 8-connected blob of changed cells with a single (a -> b) transition, <= ``max_tick`` cells,
              a filled rectangle of thickness <= 3, isolated (no other change within 2 cells) and not
              accompanied by the reverse transition on its own line (that is a thin object moving).
-    bar    = confirmed by two ticks from different steps with the same transition on the same line band
-             that touch each other (no gap), or at once by a tick on the outermost frame row/column when
-             that whole line holds only the two bar colours.
+    bar    = confirmed by two ticks from steps with *different actions* (a timer ticks whatever the action;
+             the trailing edge of a moving, clipped line does not) with the same transition on the same
+             line band that touch each other (no gap), or at once by a tick on the outermost frame
+             row/column when that whole line holds only the two bar colours.
     region = band x the contiguous run of bar-coloured cells through the ticks (sticky, only grows).
-    decay  = a bar that has not ticked for ``decay`` observed changes is dropped (false positives heal)."""
+    decay  = a bar that has not ticked during the last ``decay`` (edge bars) / ``decay_pair`` (other bars)
+             steps with visible changes is dropped, so false positives heal."""
 
-    def __init__(self, max_tick: int = 8, decay: int = 40):
+    def __init__(self, max_tick: int = 8, decay: int = 40, decay_pair: int = 10):
         self.max_tick = max_tick
         self.decay = decay
+        self.decay_pair = decay_pair
         self.bars: list[HudBar] = []
-        self.pending: list[tuple[int, tuple]] = []  # (step, blob) unconfirmed ticks
+        self.pending: list[tuple[int, tuple, Any]] = []  # (step, blob, action key) unconfirmed ticks
         self.step = 0
         self._mask = np.zeros((H, W), bool)
 
@@ -611,8 +680,9 @@ class HudTracker:
     def reset_pending(self) -> None:
         self.pending = []
 
-    def update(self, prev: np.ndarray, cur: np.ndarray) -> list[tuple]:
-        """Feed one settled transition (prev -> cur); returns the tick blobs attributed to bars."""
+    def update(self, prev: np.ndarray, cur: np.ndarray, action_key: Any = None) -> list[tuple]:
+        """Feed one settled transition (prev -> cur) and the key of the action that caused it (None = treat
+        every call as a different action); returns the tick blobs attributed to bars."""
         ch = prev != cur
         if not ch.any():
             return []
@@ -622,7 +692,7 @@ class HudTracker:
             a, b, r0, c0, r1, c1 = bl
             bar = self._bar_for(bl)
             if bar is None:
-                partner = self._pending_partner(bl)
+                partner = self._pending_partner(bl, action_key)
                 if partner is not None:
                     bar = self._make_bar(partner, bl)
                     self.bars.append(bar)
@@ -631,17 +701,19 @@ class HudTracker:
                     if axis is not None:
                         lo, hi = (r0, r1) if axis == "h" else (c0, c1)
                         st, en = (c0, c1) if axis == "h" else (r0, r1)
-                        bar = HudBar(a, b, axis, lo, hi, st, en)
+                        bar = HudBar(a, b, axis, lo, hi, st, en, edge=True)
                         self.bars.append(bar)
             if bar is None:
-                new_pending.append((self.step, bl))
+                new_pending.append((self.step, bl, action_key))
                 continue
             bar.ticks += 1
             bar.last_step = self.step
+            bar.tick_px = max(bar.tick_px, (r1 - r0 + 1) * (c1 - c0 + 1))
             self._extend(bar, cur, (r0, c0, r1, c1))
             used.append(bl)
         self.pending = (self.pending + new_pending)[-32:]
-        self.bars = [br for br in self.bars if self.step - br.last_step <= self.decay]
+        self.bars = [br for br in self.bars
+                     if self.step - br.last_step <= (self.decay if br.edge else self.decay_pair)]
         self._rebuild()
         return used
 
@@ -719,11 +791,13 @@ class HudTracker:
                 return bar
         return None
 
-    def _pending_partner(self, bl):
+    def _pending_partner(self, bl, action_key: Any = None):
         a, b, r0, c0, r1, c1 = bl
         for item in reversed(self.pending):
-            st, p = item
+            st, p, ak = item
             if st == self.step or (p[0], p[1]) != (a, b):
+                continue
+            if action_key is not None and ak == action_key:
                 continue
             _, _, q0, d0, q1, d1 = p
             if (q0, q1) == (r0, r1) and (c0 == d1 + 1 or c1 == d0 - 1):
@@ -918,7 +992,8 @@ def click_point(c: Comp, seg: Segmentation) -> tuple[int, int]:
     """Display (x, y) inside component c: the member cell nearest its centroid, snapped to the centre
     of its s x s grid block when that block centre is also in the component."""
     s, oy, ox = seg.scale
-    m = seg.labels[c.r0:c.r1 + 1, c.c0:c.c1 + 1] == c.id
+    mem = c.members or (c.id,)
+    m = seg.labels[c.r0:c.r1 + 1, c.c0:c.c1 + 1] == mem[0] if len(mem) == 1 else seg.group_mask(c)
     ys, xs = np.nonzero(m)
     ys = ys + c.r0
     xs = xs + c.c0
@@ -928,23 +1003,55 @@ def click_point(c: Comp, seg: Segmentation) -> tuple[int, int]:
     if s > 1:
         cy = oy + ((y - oy) // s) * s + s // 2
         cx = ox + ((x - ox) // s) * s + s // 2
-        if 0 <= cy < H and 0 <= cx < W and seg.labels[cy, cx] == c.id:
+        if 0 <= cy < H and 0 <= cx < W and int(seg.labels[cy, cx]) in mem:
             y, x = cy, cx
     return x, y
 
 
+def _fg_contact(seg: Segmentation) -> np.ndarray:
+    """Per component: fraction of its 4-neighbour boundary contacts that touch another non-background
+    component (high for a small piece packed inside a multi-colour composite sprite)."""
+    lab = seg.labels
+    n = len(seg.comps)
+    isfg = np.array([not c.bg for c in seg.comps], bool)
+    tot = np.zeros(n, np.int64)
+    fg = np.zeros(n, np.int64)
+    for a, b in ((lab[:, :-1], lab[:, 1:]), (lab[:-1, :], lab[1:, :])):
+        d = a != b
+        la, lb = a[d], b[d]
+        tot += np.bincount(la, minlength=n) + np.bincount(lb, minlength=n)
+        fg += np.bincount(la, weights=isfg[lb], minlength=n).astype(np.int64)
+        fg += np.bincount(lb, weights=isfg[la], minlength=n).astype(np.int64)
+    return fg, tot
+
+
 def rank_click_candidates(seg: Segmentation, hud_mask: Optional[np.ndarray] = None,
                           dead: Optional[Counter] = None, live: Optional[Counter] = None,
-                          max_n: int = 64, include_bg: bool = True) -> list[ClickCandidate]:
-    """One ACTION6 candidate per non-background object (deduplicated per grid cell), ranked by colour
-    rarity, size in grid cells, type multiplicity and compactness. Object types whose clicks changed
-    nothing (``dead`` and never ``live``) sink below every other type; types that worked before rise.
-    Order is type-diverse: the best instance of every type first, then the remaining instances, then
-    dead types; one background (empty-space) candidate closes the list."""
+                          max_n: int = 64, include_bg: bool = True,
+                          live_shapes: Optional[Counter] = None,
+                          dead_inst: Optional[Counter] = None,
+                          live_pos: Optional[dict] = None) -> list[ClickCandidate]:
+    """One ACTION6 candidate per non-background object (deduplicated per grid cell).
+
+    Prior score per object (generic, not tuned per game): size in grid cells (1-64 cells best; sub-cell
+    specks and huge regions worst), colour rarity, type multiplicity (repeated multi-cell tokens such as
+    tiles/buttons are good; masses of 1-cell specks are texture), compactness, background colour (holes)
+    and frame-edge contact (borders) are penalised, and tiny pieces packed inside a multi-colour
+    composite are penalised. History: types whose clicks changed something (``live``) come first with
+    all their instances, same-shape objects of another colour get a boost (``live_shapes``: toggles often
+    recolour). A clicked instance that did nothing (``dead_inst``, keyed (type, r0, c0)) sinks at once;
+    its whole type sinks after max(2, m/3) dead clicks (one if it has a single instance), unless it
+    was ever live - the same type can play different roles (reference picture vs board). Instances of a
+    live type are ordered by distance to the positions where clicks on it worked (``live_pos``); instances
+    of an untested type by farthest-point sampling (probe different regions first) and interleaved with
+    other types (2nd instance -0.9, 3rd -1.8, ...). One background
+    (empty-space) candidate is appended (placed after live types if empty-space clicks worked before)."""
     dead = dead or Counter()
     live = live or Counter()
+    live_shapes = live_shapes or Counter()
+    dead_inst = dead_inst or Counter()
     s, oy, ox = seg.scale
-    objs = [c for c in seg.comps if not c.bg]
+    objs = [c for c in seg.groups() if not c.bg]
     if hud_mask is not None and hud_mask.any():
         objs = [c for c in objs if not hud_mask[min(H - 1, int(round(c.cy))), min(W - 1, int(round(c.cx)))]]
     fg_total = sum(c.n for c in objs) or 1
@@ -952,16 +1059,20 @@ def rank_click_candidates(seg: Segmentation, hud_mask: Optional[np.ndarray] = No
     for c in objs:
         color_px[c.color] += c.n
     type_count = Counter(c.ctype for c in objs)
+    contact = None
+    if objs:
+        cfg, ctot = _fg_contact(seg)
+        contact = {c.id: float(sum(cfg[i] for i in c.members)) / max(1, sum(ctot[i] for i in c.members)) for c in objs}
     cell = float(s * s)
     scored = []
     for c in objs:
         cells = c.n / cell
         share = color_px[c.color] / fg_total
-        sc = 1.5 * (1.0 - share) + 0.8 * min(1.0, -math.log10(max(share, 1e-3)) / 2.0)
+        sc = 0.8 * (1.0 - share) + 0.4 * min(1.0, -math.log10(max(share, 1e-3)) / 2.0)
         if cells < 1:
             sc -= 2.0
-        elif cells == 1:
-            sc += 0.2
+        elif cells <= 1:
+            pass
         elif cells <= 64:
             sc += 1.0
         elif cells <= 256:
@@ -969,50 +1080,89 @@ def rank_click_candidates(seg: Segmentation, hud_mask: Optional[np.ndarray] = No
         else:
             sc -= 1.0
         m = type_count[c.ctype]
-        sc += 0.5 if m == 1 else (0.3 if m <= 12 else -1.5)
+        if m == 1:
+            sc += 0.4
+        elif m <= 40:
+            sc += 0.5 if cells >= 2 else 0.1
+        elif cells <= 1:
+            sc -= 1.5
         if c.n / float(c.w * c.h) >= 0.6:
             sc += 0.3
-        if c.color == seg.bg_color:  # holes / gaps in the background colour are rarely targets
+        if c.color == seg.bg_color:
             sc -= 1.5
         if c.r0 == 0 or c.c0 == 0 or c.r1 == H - 1 or c.c1 == W - 1:
             sc -= 0.5
+        if cells <= 2 and contact is not None and contact[c.id] >= 0.5:
+            sc -= 0.8
+        d_i = dead_inst[(c.ctype, c.r0, c.c0)]
         if live[c.ctype]:
             status = "live"
-            sc += 3.0
-        elif dead[c.ctype]:
+            sc += 3.0 - 2.0 * min(d_i, 1)
+        elif d_i or dead[c.ctype] >= max(1 if m == 1 else 2, math.ceil(m / 3)):
             status = "dead"
-            sc -= 8.0 + dead[c.ctype]
+            sc -= 8.0 + dead[c.ctype] + d_i
         else:
             status = "untested"
+            if live_shapes[c.shape]:
+                sc += 1.5
         scored.append((sc, c, status))
     scored.sort(key=lambda t: (-t[0], t[1].r0, t[1].c0))
+    live_pos = live_pos or {}
+    by_type: dict[str, list] = {}
+    for item in scored:
+        by_type.setdefault(item[1].ctype, []).append(item)
+    order_idx: dict[int, int] = {}
+    for ct, items in by_type.items():
+        if len(items) == 1:
+            order_idx[items[0][1].id] = 0
+            continue
+        pts = live_pos.get(ct)
+        if pts:
+            items = sorted(items, key=lambda t: (min(abs(t[1].cy - py) + abs(t[1].cx - px) for py, px in pts),
+                                                 -t[0], t[1].r0, t[1].c0))
+        else:  # farthest-point order, starting from the best-scored instance
+            chosen = [items[0]]
+            rest = items[1:]
+            while rest and len(chosen) < 32:
+                far = max(rest, key=lambda t: (min(abs(t[1].cy - q[1].cy) + abs(t[1].cx - q[1].cx) for q in chosen),
+                                               t[0], -t[1].r0, -t[1].c0))
+                chosen.append(far)
+                rest.remove(far)
+            items = chosen + rest
+        for i, t in enumerate(items):
+            order_idx[t[1].id] = i
     seen_cells: set = set()
-    type_rank: dict[str, int] = {}
-    firsts, dups = [], []
+    cands: list[tuple[tuple, ClickCandidate]] = []
     for sc, c, status in scored:
         x, y = click_point(c, seg)
         cellkey = ((y - oy) // s, (x - ox) // s)
         if cellkey in seen_cells:
             continue
         seen_cells.add(cellkey)
-        cand = ClickCandidate(x, y, c, c.ctype, type_count[c.ctype], round(sc, 3), status)
-        if c.ctype not in type_rank:
-            type_rank[c.ctype] = len(type_rank)
-            firsts.append(cand)
-        else:
-            dups.append(cand)
-    ordered = ([k for k in firsts if k.status != "dead"] + [k for k in dups if k.status != "dead"] +
-               [k for k in firsts if k.status == "dead"] + [k for k in dups if k.status == "dead"])
+        i = order_idx[c.id]
+        adj = sc - (0.05 if status == "live" else 0.9) * i
+        srank = {"live": 0, "untested": 1, "dead": 2}[status]
+        cands.append(((srank, -adj, c.r0, c.c0), ClickCandidate(x, y, c, c.ctype, type_count[c.ctype], round(adj, 3), status)))
+    cands.sort(key=lambda t: t[0])
+    ordered = [k for _, k in cands]
+    type_rank: dict[str, int] = {}
     for k in ordered:
+        if k.ctype not in type_rank:
+            type_rank[k.ctype] = len(type_rank)
         k.rank_type = type_rank[k.ctype]
     if include_bg:
-        bgc = [c for c in seg.comps if c.bg and c.color == seg.bg_color]
+        bgc = [c for c in seg.groups() if c.bg and c.color == seg.bg_color]
         if bgc:
             c = max(bgc, key=lambda q: (q.n, -q.id))
             x, y = click_point(c, seg)
             key = f"bg:{c.color}"
             st = "live" if live[key] else ("dead" if dead[key] else "untested")
-            ordered.append(ClickCandidate(x, y, c, key, 1, -9.0, st, len(type_rank)))
+            bgcand = ClickCandidate(x, y, c, key, 1, -9.0, st, len(type_rank))
+            if st == "live":
+                pos = sum(1 for k in ordered if k.status == "live")
+                ordered.insert(pos, bgcand)
+            else:
+                ordered.append(bgcand)
     return ordered[:max_n]
 
 
@@ -1114,6 +1264,9 @@ class Perceiver:
         self.avatar = AvatarTracker()
         self.dead: Counter = Counter()
         self.live: Counter = Counter()
+        self.live_shapes: Counter = Counter()
+        self.dead_inst: Counter = Counter()  # (type, r0, c0) of clicked instances that did nothing (per level)
+        self.live_pos: dict[str, list] = {}  # type -> [(cy, cx)] of clicks that changed something (per level)
         self.level: Any = None
         self._edges_h = np.zeros(W, np.int64)
         self._edges_v = np.zeros(H, np.int64)
@@ -1172,8 +1325,17 @@ class Perceiver:
         if self.level_start is None:
             self.reset(p, level if level is not None else 0)
         level_changed = level is not None and self.level is not None and level != self.level
-        clicked = self.seg(p).comp_at(x, y) if aid == 6 and x is not None else None
+        clicked = None
+        if aid == 6 and x is not None:
+            sp = self.seg(p)
+            c4 = sp.comp_at(x, y)
+            clicked = sp.group_of(c4.id) if c4 is not None else None
         h_before = self.state_hash(p)
+        if level_changed:
+            self.dead_inst.clear()
+            self.live_pos.clear()
+            for k in list(self.dead):
+                self.dead[k] = min(self.dead[k], 1)
         if level_changed or aid == 0:
             self.hud.reset_pending()
             if level is not None:
@@ -1190,7 +1352,7 @@ class Perceiver:
             return pc
         if self.level is None:
             self.level = level
-        self.hud.update(p, cur)
+        self.hud.update(p, cur, (aid,) if aid != 6 or x is None else (6, x // 8, y // 8))
         mask = self.hud.mask()
         d = frame_delta(p, cur, mask)
         noop = d.n == 0 or (self.n_steps < 4 and self.hud.is_tick_only(p, cur))
@@ -1205,8 +1367,13 @@ class Perceiver:
             key = (clicked.ctype if not clicked.bg else f"bg:{clicked.color}") if clicked is not None else "offscreen"
             if noop and len(fr) <= 1:
                 self.dead[key] += 1
+                if clicked is not None and not clicked.bg:
+                    self.dead_inst[(clicked.ctype, clicked.r0, clicked.c0)] += 1
             elif not noop:
                 self.live[key] += 1
+                if clicked is not None and not clicked.bg:
+                    self.live_shapes[clicked.shape] += 1
+                    self.live_pos.setdefault(key, []).append((clicked.cy, clicked.cx))
         av = set(self.avatar.avatars())
         pc = Percept((aid, x, y), d, events, animation_summary(p, fr, mask), noop, False, state, clicked,
                      [e for e in events if e.kind == "moved" and e.color in av],
@@ -1217,7 +1384,9 @@ class Perceiver:
 
     # -- outputs ----------------------------------------------------------------------------
     def candidates(self, frame: Any, max_n: int = 64) -> list[ClickCandidate]:
-        return rank_click_candidates(self.seg(frame), self.hud.mask(), self.dead, self.live, max_n)
+        return rank_click_candidates(self.seg(frame), self.hud.mask(), self.dead, self.live, max_n,
+                                     live_shapes=self.live_shapes, dead_inst=self.dead_inst,
+                                     live_pos=self.live_pos)
 
     def avatar_text(self, frame: Any, controls: bool = True) -> str:
         groups = self.avatar.groups(self.seg(frame))
@@ -1225,7 +1394,7 @@ class Perceiver:
             return ""
         parts = []
         for cols, (r0, c0, r1, c1) in groups:
-            s = f"{'+'.join(f'c{c}' for c in cols)} (x{c0},y{r0}) {c1 - c0 + 1}x{r1 - r0 + 1}"
+            s = f"{'+'.join(f'c{c}' for c in cols)} {c1 - c0 + 1}x{r1 - r0 + 1} at ({c0},{r0})"
             if controls:
                 ctl = self.avatar.controls(cols[0])
                 step = self.avatar.step_size(cols[0])
@@ -1272,7 +1441,7 @@ class Perceiver:
             if pc.action[0] == 6 and pc.clicked is not None and not pc.clicked.bg:
                 bits.append("type marked dead")
             return f"{head}: " + ", ".join(bits)
-        bits.append(f"{pc.delta.n} cells changed in {_fmt_bbox(pc.delta.bbox)}")
+        bits.append(f"{pc.delta.n} cells changed {_fmt_bbox(pc.delta.bbox)}")
         text = f"{head}: " + ", ".join(bits)
         budget = self.token_budget
         # raw cells first when tiny (exact), else object events, then the avatar line

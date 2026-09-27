@@ -38,7 +38,7 @@ except ImportError:  # pragma: no cover
                             to_grid)
 
 __all__ = ["Observation", "normalize_obs", "Expectation", "parse_expectation", "parse_plan", "StepResult",
-           "BatchResult", "ActionChannel"]
+           "BatchResult", "StateSet", "ActionChannel"]
 
 _DIR_ALIASES = {"up": (0, -1), "u": (0, -1), "north": (0, -1), "down": (0, 1), "d": (0, 1), "south": (0, 1),
                 "left": (-1, 0), "l": (-1, 0), "west": (-1, 0), "right": (1, 0), "r": (1, 0), "east": (1, 0)}
@@ -421,6 +421,39 @@ class Attempt:
     start: np.ndarray  # frame at the start of the attempt (level start or after RESET)
     steps: list = field(default_factory=list)  # list[StepRecord]
     end: str = "open"  # open | reset | game_over | won
+    budget_death: bool = False  # ended in GAME_OVER with the timer/budget bar (nearly) empty
+
+
+class StateSet:
+    """Remembered (level, action key) -> frames, each with the mask of cells to ignore when comparing
+    (HUD/timer cells, and for no-ops the tick cells that step flipped). Membership = equal outside the
+    stored mask, so a memory stays valid whatever the HUD tracker learns later."""
+
+    def __init__(self):
+        self.d: dict[tuple, list[tuple[np.ndarray, np.ndarray]]] = {}
+
+    def contains(self, level: int, key: tuple, frame: Optional[np.ndarray]) -> bool:
+        if frame is None:
+            return False
+        f = np.asarray(frame)
+        for m, g in self.d.get((level, key), ()):
+            if not ((f != g) & ~m).any():
+                return True
+        return False
+
+    def add(self, level: int, key: tuple, frame: Optional[np.ndarray], mask: Optional[np.ndarray] = None) -> None:
+        if frame is None:
+            return
+        f = np.asarray(frame).astype(np.int16)
+        m = np.zeros((64, 64), bool) if mask is None else np.asarray(mask, bool).copy()
+        lst = self.d.setdefault((level, key), [])
+        for n, g in lst:  # redundant if an entry ignoring a superset of cells already matches it
+            if not (m & ~n).any() and not ((f != g) & ~n).any():
+                return
+        lst.append((m, f.copy()))
+
+    def __len__(self) -> int:
+        return sum(len(v) for v in self.d.values())
 
 
 # ------------------------------------------------------------------------------------------------
@@ -439,7 +472,7 @@ class ActionChannel:
     def __init__(self, env: Any, perceiver: Optional[Perceiver] = None, step_fn: Optional[Callable] = None,
                  initial: Any = None, competition: bool = True, guard_noops: bool = True,
                  guard_deaths: bool = True, guard_reset_at_start: bool = True, guard_unavailable: bool = True,
-                 animated_noop_repeats: int = 2):
+                 noop_exempt: Iterable[int] = (7,), block_animated_noops: bool = False):
         self.env = env
         self.P = perceiver or Perceiver()
         self._step_fn = step_fn or self._default_step
@@ -448,7 +481,11 @@ class ActionChannel:
         self.guard_deaths = guard_deaths
         self.guard_reset_at_start = guard_reset_at_start
         self.guard_unavailable = guard_unavailable
-        self.animated_noop_repeats = animated_noop_repeats
+        # ACTION7 is UNDO in the ARC-AGI-3 action set: its effect depends on history, not on the frame.
+        self.noop_exempt = set(noop_exempt)
+        # a step that animates but ends where it started may still change hidden state (e.g. a rewind
+        # that records a ghost, a demo that plays once): not blocked unless asked
+        self.block_animated_noops = block_animated_noops
         self.obs = normalize_obs(initial if initial is not None else self._initial_obs(env))
         self.P.reset(self.obs.frame, self.obs.levels_completed)
         # accounting (scorer-consistent)
@@ -460,9 +497,10 @@ class ActionChannel:
         self.resets = 0
         self.blocked_count: Counter = Counter()
         # memories
-        self.noop_mem: Counter = Counter()  # (level, hash, key) -> times seen with no effect
-        self.anim_noop_mem: Counter = Counter()
-        self.death_mem: set = set()
+        self.noops = StateSet()  # single-frame no-ops
+        self.anim_noops = StateSet()  # animated steps that ended where they started (not blocked by default)
+        self.deaths = StateSet()  # (state, action) -> GAME_OVER
+        self.ok_mem: set = set()  # (level, masked hash, key) executed without GAME_OVER
         self.attempt = Attempt(self.level, self._frame_copy())
         self.attempts: dict[int, list[Attempt]] = {}  # level -> closed attempts
         self.solutions: dict[int, list[tuple]] = {}  # level -> winning action list
@@ -504,6 +542,20 @@ class ActionChannel:
     def _same_state(self, a: np.ndarray, b: np.ndarray) -> bool:
         return not bool(((a != b) & ~self.P.hud_mask()).any())
 
+    def _exact_hash(self, frame: Optional[np.ndarray] = None) -> str:
+        f = self.obs.frame if frame is None else frame
+        return "none" if f is None else "x" + masked_hash(f, None, self.obs.levels_completed)
+
+    def _budget_nearly_out(self, frame: Optional[np.ndarray]) -> bool:
+        """True when a detected budget/timer bar has (almost) no 'remaining'-colour cells left, i.e. a
+        GAME_OVER now is probably budget exhaustion rather than caused by the action itself."""
+        if frame is None:
+            return False
+        for bar in self.P.hud.bars:
+            if bar.remaining(frame) <= 2 * max(bar.tick_px, bar.hi - bar.lo + 1):
+                return True
+        return False
+
     def _hash(self, frame: Optional[np.ndarray] = None) -> str:
         f = self.obs.frame if frame is None else frame
         if f is None:
@@ -539,12 +591,13 @@ class ActionChannel:
             return f"{self.state}: only RESET is accepted"
         if self.guard_unavailable and self.obs.available_actions and aid not in self.obs.available_actions:
             return f"ACTION{aid} not available {self.obs.available_actions}"
-        h = self._hash()
+        f = self.obs.frame
         for k in self.action_keys(a):
-            mk = (self.level, h, k)
-            if self.guard_deaths and mk in self.death_mem:
+            if self.guard_deaths and self.deaths.contains(self.level, k, f):
                 return "known GAME_OVER transition"
-            if self.guard_noops and (self.noop_mem[mk] >= 1 or self.anim_noop_mem[mk] >= self.animated_noop_repeats):
+            if self.guard_noops and aid not in self.noop_exempt and (
+                    self.noops.contains(self.level, k, f) or
+                    (self.block_animated_noops and self.anim_noops.contains(self.level, k, f))):
                 return "known no-op here"
         return None
 
@@ -625,15 +678,25 @@ class ActionChannel:
             self.attempt = Attempt(self.level, self._frame_copy())
             return
         if obs.state == "GAME_OVER":
+            # Exact (unmasked) key always. The HUD-masked key only when the death is (a) not plausibly
+            # budget exhaustion (with the timer masked, a budget death would ban a harmless action) and
+            # (b) not history-dependent: the same visible (state, action) never survived before.
+            budget = self._budget_nearly_out(prev_obs.frame)
             for k in keys:
-                self.death_mem.add((lvl, h_before, k))
+                self.deaths.add(lvl, k, prev_obs.frame)  # exact
+                if not budget and (lvl, h_before, k) not in self.ok_mem:
+                    self.deaths.add(lvl, k, prev_obs.frame, self.P.hud_mask())
+            self.attempt.budget_death = budget
             self._close_attempt("game_over")
             self.attempt = Attempt(lvl, self._frame_copy())  # placeholder until the RESET
             return
-        if pc.noop:
-            mem = self.noop_mem if len(obs.frames) <= 1 else self.anim_noop_mem
+        for k in keys:
+            self.ok_mem.add((lvl, h_before, k))
+        if pc.noop and prev_obs.frame is not None and obs.frame is not None:
+            mem = self.noops if len(obs.frames) <= 1 else self.anim_noops
+            ign = self.P.hud_mask() | (np.asarray(prev_obs.frame) != np.asarray(obs.frame))
             for k in keys:
-                mem[(lvl, h_before, k)] += 1
+                mem.add(lvl, k, prev_obs.frame, ign)
 
     def _close_attempt(self, end: str) -> None:
         at = self.attempt
@@ -711,11 +774,13 @@ class ActionChannel:
         return recs
 
     def replay_prefix(self, n: Optional[int] = None, level: Optional[int] = None, skip_noops: bool = True,
-                      compress_loops: bool = False, verify: bool = True) -> BatchResult:
+                      compress_loops: Optional[bool] = None, verify: bool = True) -> BatchResult:
         """Re-execute the first ``n`` steps (default: all) of the known-good prefix of this level's last
         attempt. Must be called in the attempt's start state (i.e. right after the RESET that follows a
         GAME_OVER or a voluntary level reset). Every step is verified against the recorded post-step frame
-        (HUD masked); the replay halts at the first divergence. Guards are bypassed (the actions are known)."""
+        (HUD masked); the replay halts at the first divergence. Guards are bypassed (the actions are known).
+        ``compress_loops`` (cut revisited states) defaults to True only when the attempt died of budget
+        exhaustion - replaying all of it would walk straight back into the same budget death."""
         at = self.last_attempt(level)
         if at is None:
             return BatchResult([], True, "no recorded attempt for this level", 0)
@@ -723,12 +788,18 @@ class ActionChannel:
             return BatchResult([], True, f"{self.state}: RESET first", 0)
         if not self._same_state(self._frame_copy(), at.start):
             return BatchResult([], True, "not at the recorded start state of the attempt (RESET first)", 0)
+        if compress_loops is None:
+            compress_loops = at.budget_death
         recs = self.known_good_prefix(level, skip_noops, compress_loops)
         if n is not None:
             recs = recs[:n]
         plan = [(r.action, Expectation("frame", {"frame": r.frame_after}, "recorded state") if verify else None)
                 for r in recs]
-        return self.execute(plan, halt_on_mismatch=True, stop_on_level=True, force=True)
+        res = self.execute(plan, halt_on_mismatch=True, stop_on_level=True, force=True)
+        if at.budget_death and not res.halted:
+            res.reason = (f"done; the previous attempt ran out of budget after {len(at.steps)} actions "
+                          f"(replayed {res.executed}, state loops cut)")
+        return res
 
     def replay_solution(self, level: int) -> BatchResult:
         """Re-run the recorded winning action list of ``level`` (e.g. after a full restart)."""

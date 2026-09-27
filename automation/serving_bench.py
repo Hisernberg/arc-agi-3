@@ -509,10 +509,21 @@ class Game:
     pool: list[str] = field(default_factory=list)  # recorded tool results, in order
 
 
+def resolve_pack_path(path: Path) -> Path:
+    """Kaggle datasets auto-decompress uploaded `.gz` files, so `x.jsonl.gz` may arrive as `x.jsonl` (and vice versa)."""
+    path = Path(path)
+    if path.exists():
+        return path
+    alt = path.with_suffix("") if path.suffix == ".gz" else path.with_name(path.name + ".gz")
+    if alt.exists():
+        return alt
+    raise FileNotFoundError(f"replay pack not found: {path} (also tried {alt})")
+
+
 def load_pack(path: Path) -> tuple[dict[str, Any], list[Game]]:
     header: dict[str, Any] | None = None
     games: list[Game] = []
-    with open_text(Path(path), "rt") as fh:
+    with open_text(resolve_pack_path(path), "rt") as fh:
         for line in fh:
             if not line.strip():
                 continue
@@ -691,6 +702,33 @@ class UrllibClient(HttpClient):
         handlers = [urllib.request.ProxyHandler({})] if _is_loopback(base_url) else []
         self._opener = urllib.request.build_opener(*handlers)
 
+    @staticmethod
+    def _resolve(fut: asyncio.Future, result: Any, exc: BaseException | None) -> None:
+        if fut.done():  # cancelled when the window closed
+            return
+        if exc is not None:
+            fut.set_exception(exc)
+        else:
+            fut.set_result(result)
+
+    def _in_daemon_thread(self, fn: Callable[..., Any], *args: Any) -> asyncio.Future:
+        """Run a blocking call in a daemon thread: in-flight requests never block loop or interpreter shutdown."""
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+
+        def work() -> None:
+            try:
+                result, exc = fn(*args), None
+            except BaseException as e:  # noqa: BLE001 - forwarded to the awaiting coroutine
+                result, exc = None, e
+            try:
+                loop.call_soon_threadsafe(self._resolve, fut, result, exc)
+            except RuntimeError:  # loop already closed
+                pass
+
+        threading.Thread(target=work, daemon=True, name="bench-http").start()
+        return fut
+
     def _post(self, url: str, payload: dict[str, Any], timeout: float) -> tuple[int, Any, str]:
         import urllib.error
         import urllib.request
@@ -717,10 +755,10 @@ class UrllibClient(HttpClient):
             return exc.code, ""
 
     async def post_json(self, url, payload, timeout):
-        return await asyncio.to_thread(self._post, url, payload, timeout)
+        return await self._in_daemon_thread(self._post, url, payload, timeout)
 
     async def get_text(self, url, timeout):
-        return await asyncio.to_thread(self._get, url, timeout)
+        return await self._in_daemon_thread(self._get, url, timeout)
 
 
 class AiohttpClient(HttpClient):
@@ -1445,10 +1483,8 @@ async def run_bench_async(cfg: BenchConfig) -> dict[str, Any]:
         if not model:
             raise RuntimeError(f"no model at {cfg.base_url}/models and --model not given")
         model_info.setdefault("id", model)
-        est = TokenEstimator(header["tools"])
         agents = [Agent(i, games[i % len(games)], len(games), header, cfg, model, TokenEstimator(header["tools"]))
                   for i in range(cfg.agents)]
-        del est
         reqs: list[ReqRecord] = []
         turns: list[TurnRecord] = []
         stop = asyncio.Event()

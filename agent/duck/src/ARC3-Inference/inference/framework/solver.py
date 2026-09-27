@@ -23,6 +23,7 @@ import arcengine
 import taaf.game
 from taaf.solver import Solver
 
+from inference.agent import patches
 from inference.agent.action_names import (
     to_engine_action,
     to_model_action,
@@ -164,6 +165,62 @@ def _write_transcript_html(transcript_path: Path, html_path: Path, title: str) -
     html_path.write_text(body, encoding="utf-8")
 
 
+# [DUCK-PATCH B08_SCHEDULER] progress-aware turn scheduler (agent/scheduler.py). Opt-in:
+# DUCK_PATCH_B08_SCHEDULER=1; DUCK_PATCH_B08_SCHEDULER_CONFIG = JSON of SchedulerConfig fields (+ optional
+# "window_s" cap on the planning window). Budgets come from the wall clock left when _run_games starts.
+_B08_MODULE: Any = None
+
+
+def _b08_module() -> Any:
+    global _B08_MODULE
+    if _B08_MODULE is None:
+        import importlib.util
+        import sys
+
+        # solver.py -> framework -> inference -> ARC3-Inference -> src -> duck -> agent/scheduler.py
+        path = Path(
+            os.environ.get("DUCK_PATCH_B08_SCHEDULER_MODULE", "").strip()
+            or Path(__file__).resolve().parents[5] / "scheduler.py"
+        ).resolve()
+        existing = sys.modules.get("scheduler")
+        if existing is not None and Path(getattr(existing, "__file__", "") or "").resolve() == path:
+            _B08_MODULE = existing
+        else:
+            spec = importlib.util.spec_from_file_location("hydra_scheduler", path)
+            if spec is None or spec.loader is None:
+                raise ImportError(f"B08 scheduler module not found at {path}")
+            module = importlib.util.module_from_spec(spec)
+            sys.modules["hydra_scheduler"] = module
+            spec.loader.exec_module(module)
+            _B08_MODULE = module
+    return _B08_MODULE
+
+
+def _b08_make_gate(solver: "HarnessSolver", keys: list[str]) -> Any:
+    module = _b08_module()
+    raw = os.environ.get("DUCK_PATCH_B08_SCHEDULER_CONFIG", "").strip()
+    data = dict(json.loads(raw)) if raw else {}
+    window = data.pop("window_s", None)
+    data.setdefault("slots", max(1, int(solver.concurrency)))
+    cfg = module.SchedulerConfig.from_mapping(data)
+    remaining = solver.soft_time_remaining_seconds()  # measured now: after serving setup
+    if window is not None:
+        remaining = float(window) if remaining is None else min(remaining, float(window))
+    if remaining is None:
+        remaining = 32400.0
+    return module.SchedulerGate(keys, cfg, deadline_in_s=remaining, log=lambda line: print(line, flush=True))
+
+
+def _b08_write_summary(solver: "HarnessSolver", gate: Any) -> None:
+    target = os.environ.get("DUCK_PATCH_B08_SCHEDULER_SUMMARY", "").strip()
+    path = Path(target) if target else (solver.job_dir / "hydra_scheduler.json" if solver.job_dir else None)
+    if path is None:
+        return
+    with contextlib.suppress(Exception):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(gate.summary(), indent=1, sort_keys=True) + "\n", encoding="utf-8")
+
+
 @dataclass
 class _HarnessGameSession:
     solver: "HarnessSolver"
@@ -183,6 +240,26 @@ class _HarnessGameSession:
     last_engine_action: str | None = None
     token_baseline: int = 0
     _viewer_events_flushed: int = field(default=0, init=False, repr=False)
+    # [DUCK-PATCH B08_SCHEDULER] SchedulerGate shared by every game of the run (None: stock loop).
+    scheduler_gate: Any = None
+
+    @property
+    def _b08_key(self) -> str:
+        run = self.game.game_run
+        return self.solver._run_stem(run.game_id if run is not None else str(self.game_index), self.pass_index)
+
+    def _b08_release(self, result: Any) -> None:
+        try:
+            levels: int | None = int(self.game.current_state.levels_completed)
+        except Exception:
+            levels = None
+        try:
+            won = _is_run_complete(self.game)
+        except Exception:
+            won = False
+        self.scheduler_gate.release(
+            self._b08_key, levels=levels, won=won, executed=bool(getattr(result, "step_executed", False))
+        )
 
     def current_frame(self) -> Frame:
         return Frame(
@@ -210,6 +287,8 @@ class _HarnessGameSession:
         return len(run.history) if run is not None else 0
 
     def runtime_limit_reached(self) -> bool:
+        if self.scheduler_gate is not None:  # [DUCK-PATCH B08_SCHEDULER] the gate enforces floor/cap
+            return False
         if self.solver.max_runtime_s_per_game is None:
             return False
         return (
@@ -218,11 +297,35 @@ class _HarnessGameSession:
 
     def timing_payload(self) -> dict[str, float | None]:
         elapsed = max(0.0, time.monotonic() - self.started_at)
-        if self.solver.max_runtime_s_per_game is None:
+        if self.scheduler_gate is not None:  # [DUCK-PATCH B08_SCHEDULER]
+            remaining = self.scheduler_gate.time_remaining(self._b08_key)
+        elif self.solver.max_runtime_s_per_game is None:
             remaining = None
         else:
             remaining = max(0.0, self.solver.max_runtime_s_per_game - elapsed)
         return {"run_elapsed_seconds": elapsed, "time_remaining_seconds": remaining}
+
+    def game_status(self) -> dict[str, Any]:
+        """[DUCK-PATCH P1/M2] game clock + level bookkeeping handed to the analyzer each turn
+        (per-turn pacing line, verified-facts level history). ``time_remaining_seconds`` is the
+        sooner of the per-game budget and the run's soft deadline; ``baseline_actions`` is None
+        when the environment hides baselines (submission mode)."""
+        timing = self.timing_payload()
+        remaining = timing["time_remaining_seconds"]
+        soft_remaining = self.solver.soft_time_remaining_seconds()
+        if soft_remaining is not None:
+            remaining = soft_remaining if remaining is None else min(remaining, soft_remaining)
+        run = self.game.game_run
+        baselines = getattr(self.game, "base_actions_per_level", None)
+        return {
+            "elapsed_seconds": timing["run_elapsed_seconds"],
+            "time_remaining_seconds": remaining,
+            "levels_completed": int(self.game.current_state.levels_completed),
+            "number_of_levels": int(self.game.number_of_levels),
+            "actions_per_level": list(run.actions_per_level) if run is not None else [],
+            "baseline_actions": list(baselines) if baselines else None,
+            "action_count": self.action_count,
+        }
 
     def request_timeout_seconds(self) -> float | None:
         candidates: list[float] = []
@@ -251,6 +354,8 @@ class _HarnessGameSession:
             return True
         if _is_run_complete(self.game):
             return True
+        if self.scheduler_gate is not None and self.scheduler_gate.is_retired(self._b08_key):
+            return True  # [DUCK-PATCH B08_SCHEDULER] retired (deadline / cap / swapped out)
         if self.runtime_limit_reached():
             return True
         if (
@@ -287,7 +392,18 @@ class _HarnessGameSession:
                 else:
                     analysis_step = retry_analysis_step
 
+                if self.scheduler_gate is not None:
+                    # [DUCK-PATCH B08_SCHEDULER] one analyze() call = one scheduled turn.
+                    grant = self.scheduler_gate.acquire(self._b08_key, abort=self.stop_event.is_set)
+                    if not grant.ok:
+                        break
+                result = None
                 self.write_runtime_state()
+                if (
+                    patches.enabled("P1_SCORING") or patches.enabled("M2_FACTS")
+                ) and hasattr(self.analyzer, "set_game_status"):
+                    # [DUCK-PATCH P1/M2] per-turn game clock and level history for the prompt.
+                    self.analyzer.set_game_status(self.state_path, self.game_status())
                 transcript_before = self._read_transcript_bytes()
                 try:
                     result = self.analyzer.analyze(
@@ -301,6 +417,8 @@ class _HarnessGameSession:
                         should_stop=self.should_stop,
                     )
                 finally:
+                    if self.scheduler_gate is not None:  # [DUCK-PATCH B08_SCHEDULER]
+                        self._b08_release(result)
                     transcript_delta = self._transcript_delta_since(transcript_before)
                     if transcript_delta.strip():
                         self._append_analysis_viewer_event(
@@ -899,15 +1017,30 @@ class HarnessSolver(Solver):
         pass_indices_by_game_id: dict[str, int] = {}
         loop = asyncio.get_running_loop()
         pool = self._worker_pool
+        # [DUCK-PATCH B08_SCHEDULER] every game gets a worker thread; the gate admits `concurrency` turns at once.
+        gate: Any = None
+        sched_pool: ThreadPoolExecutor | None = None
+        if patches.enabled("B08_SCHEDULER") and games:
+            keys: list[str] = []
+            seen: dict[str, int] = {}
+            for index, game in enumerate(games):
+                game_id = game.game_run.game_id if game.game_run is not None else str(index)
+                keys.append(self._run_stem(game_id, seen.get(game_id, 0)))
+                seen[game_id] = seen.get(game_id, 0) + 1
+            gate = _b08_make_gate(self, keys)
+            sched_pool = ThreadPoolExecutor(max_workers=len(games), thread_name_prefix="harness-sched")
+            pool = sched_pool
+            semaphore = asyncio.Semaphore(len(games))
 
         async def run_one(index: int, pass_index: int, game: taaf.game.Game) -> None:
             async with semaphore:
                 args = (game, index, pass_index, self._local_server_for_game_index(index))
+                kwargs = {"scheduler_gate": gate} if gate is not None else {}
                 if pool is not None:
-                    await loop.run_in_executor(pool, functools.partial(self._play_one, *args))
+                    await loop.run_in_executor(pool, functools.partial(self._play_one, *args, **kwargs))
                 else:
                     # _setup wasn't called (direct test invocation).
-                    await asyncio.to_thread(self._play_one, *args)
+                    await asyncio.to_thread(self._play_one, *args, **kwargs)
 
         tasks: list[asyncio.Task[None]] = []
         for index, game in enumerate(games):
@@ -921,9 +1054,18 @@ class HarnessSolver(Solver):
             )
         except asyncio.CancelledError:
             self._stop_event.set()
+            if gate is not None:  # [DUCK-PATCH B08_SCHEDULER] wake every parked game
+                gate.shutdown("cancelled")
             await self._drain_game_tasks(tasks)
             self._finish_remaining(games)
             raise
+        finally:
+            if gate is not None:  # [DUCK-PATCH B08_SCHEDULER]
+                with contextlib.suppress(Exception):
+                    gate.shutdown("finished")
+                _b08_write_summary(self, gate)
+            if sched_pool is not None:
+                sched_pool.shutdown(wait=False)
 
     async def _drain_game_tasks(self, tasks: list[asyncio.Task[None]]) -> None:
         if not tasks:
@@ -1211,6 +1353,26 @@ class HarnessSolver(Solver):
         index: int,
         pass_index: int,
         local_server: _LocalServerRuntime | None = None,
+        scheduler_gate: Any = None,
+    ) -> None:
+        try:
+            self._play_one_inner(game, index, pass_index, local_server, scheduler_gate)
+        finally:
+            if scheduler_gate is not None:  # [DUCK-PATCH B08_SCHEDULER] free the game's active spot
+                run = game.game_run
+                with contextlib.suppress(Exception):
+                    scheduler_gate.finish(
+                        self._run_stem(run.game_id if run is not None else str(index), pass_index),
+                        str(getattr(run, "state", "finished")),
+                    )
+
+    def _play_one_inner(
+        self,
+        game: taaf.game.Game,
+        index: int,
+        pass_index: int,
+        local_server: _LocalServerRuntime | None = None,
+        scheduler_gate: Any = None,
     ) -> None:
         try:
             assert game.game_run is not None
@@ -1232,6 +1394,7 @@ class HarnessSolver(Solver):
                 analysis_html_relpath=analysis_relpath,
                 stop_event=self._stop_event,
                 viewer_data_path=viewer_data_path,
+                scheduler_gate=scheduler_gate,
             )
             session.play()
         except Exception as exc:

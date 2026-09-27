@@ -8,5 +8,5 @@ Quota at start of planning (09-27): 27.6 / 30 h used (mostly other competitions 
 ## Week W1: 2026-10-03 → 2026-10-09 (budget 15 h)
 | Date | Kernel / purpose | Est. h | Actual h | Notes |
 |---|---|---|---|---|
-| 10-03 | EXP-001 serving A/B (Flash-Next tuned vs 27B-FP8) | 1.5 | | |
-| 10-03 | Hydra-1 smoke commit + submit | 0.4 | | |
+| 10-03 | EXP-001 serving A/B (suite: flashnext_tuned → qwen27b_fp8 → baseline → extras, 100-min budget) | 1.7 | | |
+| 10-03 | Hydra-0 smoke commit + submit (EXP-002) | 0.4 | | |

@@ -1,0 +1,59 @@
+{
+  "schema": 1,
+  "name": "qwen27b_fp8_nomtp",
+  "description": "Fallback for qwen27b_fp8: the proven 08-17 keithtyser recipe (vLLM 0.19, fp8 KV, prefix caching, no MTP, util 0.90); only change is max-model-len 262144 -> 32768.",
+  "runtime": {
+    "kind": "vllm019_wheelhouse",
+    "vllm_version": "0.19.0 (pip wheelhouse) + transformers 5.8.0 / huggingface_hub 1.5.0 overlay",
+    "datasets": ["driessmit1/arc3-vllm-h100-wheelhouse-v3", "keithtyser/taaf-duck-qwen38-serving-v1"],
+    "site_dir": "/tmp/vllm019-site"
+  },
+  "model": {
+    "served_model_name": "Qwen/Qwen3.8-27B-FP8",
+    "kaggle_model": "foysalemonshanto/qwen3-8-27b-fp8-repacked-v1/PyTorch/hf-fp8/1",
+    "hf_repo": "Qwen/Qwen3.8-27B-FP8@017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+    "path_candidates": ["/kaggle/input/models/foysalemonshanto/qwen3-8-27b-fp8-repacked-v1/pytorch/hf-fp8/1"],
+    "checkpoint_gib": 28.8,
+    "architecture": "Qwen3_5ForConditionalGeneration (48 GDN + 16 full-attention layers); mtp.safetensors (477 MB) present"
+  },
+  "host": "127.0.0.1",
+  "port": 1234,
+  "entrypoint": ["-m", "vllm.entrypoints.openai.api_server", "--model", "{model_path}"],
+  "args": [
+    ["--served-model-name", "{served_model_name}"],
+    ["--host", "{host}"],
+    ["--port", "{port}"],
+    ["--tensor-parallel-size", "1"],
+    "--enable-auto-tool-choice",
+    ["--tool-call-parser", "qwen3_coder"],
+    ["--generation-config", "vllm"],
+    "--enable-prefix-caching",
+    ["--default-chat-template-kwargs", {"preserve_thinking": true}],
+    ["--reasoning-parser", "qwen3"],
+    ["--max-model-len", "32768"],
+    ["--kv-cache-dtype", "fp8"]
+  ],
+  "env": {"USE_TF": "0", "TRANSFORMERS_NO_TF": "1", "TRANSFORMERS_NO_TORCHVISION": "1", "VLLM_NO_USAGE_STATS": "1"},
+  "client": {
+    "context_window": 32768,
+    "safety_margin": 6144,
+    "reply_reserve": 512,
+    "max_tokens": null,
+    "images_in_history": 2,
+    "yield_seconds": 60
+  },
+  "harness_env": {
+    "LOCAL_ANALYZER_CONTEXT_WINDOW": "32768",
+    "LOCAL_ANALYZER_MODEL_ID": "Qwen/Qwen3.8-27B-FP8",
+    "INFERENCE_ANALYZER_MODEL": "Qwen/Qwen3.8-27B-FP8",
+    "LOCAL_ANALYZER_BASE_URL": "http://127.0.0.1:1234/v1",
+    "OPENAI_BASE_URL": "http://127.0.0.1:1234/v1",
+    "LOCAL_ANALYZER_MAX_OUTPUT": "0"
+  },
+  "startup": {"timeout_s": 1200, "expected_s": 480},
+  "memory": {"weights_gib": 28.51, "kv_gib": 48.8, "kv_dtype": "fp8_e4m3", "kv_tokens_reported": 398272},
+  "fallback": null,
+  "evidence": [
+    "keithtyser/duck-qwen3-8-27b-fp8 run 2026-08-17: 25 running, 0 waiting, prefix hit ~42 %, 439 tok/s mean generation"
+  ]
+}

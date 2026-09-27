@@ -33,6 +33,9 @@ Start every session by reading, in order:
 - Never train on or hard-code solutions to the 25 public games: the hidden 110 games are different by design.
   Public games are for mechanism testing only.
 - Local eval must reject the `ACTION6`-with-null-coordinates "win" bug (scores a false WIN on 18/25 games).
+- Git flow: campaign branch `claude/charming-feynman-i0xee3`; the user merges PRs into `main` often. After a merge,
+  bring `main` into the branch with `git merge` (fast-forward or merge commit — never rebase/force-push), then open a
+  new draft PR for new commits.
 - Commit and push after every meaningful step. Keep large raw data out of git (Hugging Face datasets or scratch).
 
 ## Where things are

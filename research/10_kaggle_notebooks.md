@@ -32,7 +32,7 @@ Machine-readable index: `SCRATCH/kaggle/notebooks/index.json` (and `index.csv` f
    | Gemma-4-31B | 0.42 | 0.86 |
    | Non-LLM (BFS, random, heuristics) | 0.16 | 0.54 |
 
-5. **A local public-25 score does not predict the hidden leaderboard.** Across 40 notebooks with a full 25-game commit run, the correlation between local mean and public LB is **r = 0.11**. The base code alone ranges 5.8–8.7 locally.
+5. **A local public-25 score does not predict the hidden leaderboard.** Across 41 notebooks with a full 25-game commit run, the correlation between local mean and public LB is **r = 0.16** (0.30 without the 27,000 s-per-game outlier). The base code alone ranges 5.8–8.7 locally.
    - **Time allocation matters.** The hidden run has about **110 games** (55 public-LB and 55 private, all played in one 9-hour run). Duck plays 28 concurrently with 7,920 s per game, so 4 waves need about 31.7k s but only about 28k s is available. The last wave is cut roughly in half.
    - One fork set `max_runtime_s_per_game = 27000`. It scored **13.3 locally but only 2.58 on the LB**, because it starved about 80 hidden games.
 6. **The GPU is badly under-used by every public Flash-Next notebook, including the user's** (§5.3).
@@ -137,7 +137,7 @@ Consequences:
 - **One submission cannot resolve an effect smaller than about ±1.0** (2 sd) on this stack. The user's 3.85 and scottlegrand's 5.19 may be the same code on different draws. 5.19 is about 3.7 sd above the base mean, so the scottlegrand patches are *probably* worth about +1 to +1.5, but that is not certain.
 - **Local public-25 runs are almost uninformative about the LB.**
   - Base code locally: 5.78, 6.42, 6.74, 6.76, 7.10, 7.18, 7.20, 7.24, 7.46, 8.56, 8.61, 8.74. That is sd ≈ 0.9 on a mean of about 7.3.
-  - Correlation between local and LB over 40 notebooks: r = 0.11.
+  - Correlation between local and LB over 41 notebooks: r = 0.16, or 0.30 without the defiaudit 27,000 s outlier.
   - The public games are also easier: a local mean of about 7 corresponds to an LB of about 3.3.
 - Per-game local profile of the Duck family (39 runs × 25 games, `SCRATCH/kaggle/notebooks/probe_local_scores.json`):
   - **Strong:** ft09 38, lp85 23, vc33 18, re86 16, ar25 12.
@@ -391,7 +391,7 @@ Result: LB 3.57 and local 5.83. There is no measurable gain on this model, which
   - narrate animations in text (2.57);
   - raise the KV cache to 16 GB *with MTP on* (amanatar v40: setup fails);
   - raise `max_runtime_s_per_game` far above the wave-fit value (2.58);
-  - trust a single local 25-game run (r = 0.11) or a single LB submission (sd 0.5).
+  - trust a single local 25-game run (r ≈ 0.2 with the LB; the same code re-run locally differs by about ±1–2) or a single LB submission (sd 0.5).
 - **Methodology:** judge a change by **several LB submissions** or by **a large local sample** (≥ 3 seeds × 25 games), as Thuitanium tries to. The public field's history is mostly best-of-N luck.
 - **Strategic:** reaching 18–20 needs a qualitatively different ingredient (§7), not another Duck prompt patch.
 

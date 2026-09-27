@@ -1,0 +1,130 @@
+{
+ "_about": "Normalized request fingerprints (sha256[:16] of json.dumps(payload, sort_keys) with run_elapsed_seconds/time_remaining_seconds values masked) of duck_offline mock runs, seed 0, captured 2026-09-27 BEFORE the B06/B07 patches (DUCK-PATCH P1-P3, M1, M2). tests/test_duck_prompt_memory.py asserts that turning every v9 switch off reproduces them byte-for-byte.",
+ "patched": {
+  "digests": {
+   "ar25-0c556536": [
+    "2df4365debb5c621",
+    "d9280b36a2dd2c0c",
+    "6e7a6d658dd89a0e",
+    "8f5c6afc7972f385",
+    "2c1262eab35f1d15",
+    "0195fef0008fef0c",
+    "ef20bc0b3775b677",
+    "50f4d35eea933f38",
+    "6aef0aa09b7ecffe",
+    "8eb8dfd19baaaeef",
+    "9caa399407e8569e",
+    "fd362ad302c4e182",
+    "040de97ba683e45a",
+    "eb8736cec3a4adcb",
+    "4ce90bd8335a5b6f",
+    "3806a46885b085a1",
+    "577337c8631d3fbc",
+    "ad928d677abd93c3",
+    "e947c21c3f00f1d2",
+    "d1745c044be9ed9f",
+    "c5488272f66dd0bc",
+    "1499fd4f0f09e0cc",
+    "72a23b40dbbfbb01",
+    "04cc17f9aa707bc5"
+   ],
+   "ls20-9607627b": [
+    "7bccad6b594746c3",
+    "61e7de82b579a00e",
+    "ee8341eb11173b38",
+    "fbfee2979bf237fa",
+    "cf273caf66afe717",
+    "8bb7fc9dfed136dd",
+    "8dafdb327baa2cfa",
+    "7d2a7af208d262ac",
+    "c9be31265f9a66d4",
+    "39e70a1244cc131d",
+    "89f0ae69661bd6d0",
+    "d450d66f4f20f152",
+    "d4fdded517a13c02",
+    "0ee912478fe30dff",
+    "d0ee8ab0ebb81277",
+    "83dfd50e305294fa",
+    "d2fac30dd358a161",
+    "a82c5775ef7532bb",
+    "cd4c33381c6fb4aa",
+    "a7c0569d9dab8545",
+    "16312e28e723da86",
+    "5df8f37aaf00c3fa",
+    "97d2bf10606eed34"
+   ],
+   "vc33-5430563c": [
+    "d04515ff9fdf2294",
+    "cbfddfb6b3040d5c",
+    "e26cc0c5869f5517",
+    "3e5eeb491fd413a6",
+    "b2b768144b375d02",
+    "92aeac8e5eead5bb",
+    "51b80a36c381ceb2",
+    "cda7298b9fb2aab0",
+    "fd9cc3b300bb2f03",
+    "61e16489500f96ab",
+    "9a305ccdaba445e7",
+    "11b6b425e097c620",
+    "4c4a04c1544ad512",
+    "7d2ec697f2e6ba29",
+    "ff478ddcd236c328",
+    "84920205709a5bd0",
+    "d3968fe9e2dd9bb9",
+    "37547e61275de85b",
+    "5f0df7f7fc9626d1",
+    "0ee780c33af03d8e",
+    "8db5637a4293b096",
+    "b1b5f98912ad11cd",
+    "8a7fef500a195779",
+    "37b95bddb9a2e1f3",
+    "04da632f4a978856"
+   ]
+  },
+  "games": [
+   "ls20",
+   "vc33",
+   "ar25"
+  ],
+  "steps": 20
+ },
+ "stock": {
+  "digests": {
+   "ls20-9607627b": [
+    "7bccad6b594746c3",
+    "61e7de82b579a00e",
+    "ee8341eb11173b38",
+    "1463d177d0cc0610",
+    "7268e09227799408",
+    "100bd3884fcd1aba",
+    "ce7cf40d05f067a2",
+    "bc08825842ad2454",
+    "a143219f5a481cc4",
+    "733f48ade601ae75",
+    "3837caeb74d59d3f",
+    "a9ca1f29137906bf",
+    "09b5a10cdf2b6e17"
+   ],
+   "vc33-5430563c": [
+    "d04515ff9fdf2294",
+    "cbfddfb6b3040d5c",
+    "e26cc0c5869f5517",
+    "09159efc2eb96261",
+    "0dd59e6bcdc2f434",
+    "8af8f25941bfae74",
+    "b9846698429deca9",
+    "506d8155550402f6",
+    "44e4e7755015b8a3",
+    "7177812a37ad1e16",
+    "ee86d7fe9a38a9c7",
+    "cee4adc64ddc9a1d",
+    "4f61a0a968e8bb06"
+   ]
+  },
+  "games": [
+   "ls20",
+   "vc33"
+  ],
+  "steps": 8
+ }
+}
