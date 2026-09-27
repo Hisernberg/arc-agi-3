@@ -12,6 +12,9 @@ Start every session by reading, in order:
 4. `plans/MISTAKES.md` — things that already cost us a run. Do not repeat them.
 
 ## Hard rules
+- **Never delete anything** from any repo or hub — GitHub (files, branches, history: no force-push/reset of pushed
+  commits), Hugging Face (repos, files, revisions), Kaggle (datasets, notebooks, versions). The user does all
+  deletions manually. Storage is plentiful: add new files/versions instead of replacing or pruning.
 - **Secrets**: credentials come only from environment variables `KAGGLE_API_TOKEN`, `HF_TOKEN`, `ARC_API_KEY`,
   `GITHUB_TOKEN` (or a local `~/.secrets/arc.env` that is never committed). Never write a token into any file in
   this repo, a notebook, a Kaggle dataset, an HF repo, a commit message or a PR. If a variable is missing, say so
