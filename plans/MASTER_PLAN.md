@@ -55,7 +55,8 @@ the hidden LB, 3.20 → 3.71) · keep AGENTFIX F1–F3 + v7.1 state fix. Expecte
 
 ### M1 — Compute (target ≥ 4× decisions per game). *Highest EV, lowest research risk.*
 - **Serving A/B on real traffic** (GPU day 1): replay recorded Duck prompts as 28 concurrent multi-turn agents against
-  - **A: Flash-Next NVFP4, tuned vLLM, MTP OFF** (frees 7.5 GiB): KV 5 → 12+ GiB, `--kv-cache-dtype fp8` (~2× tokens),
+  - **A: Flash-Next NVFP4, tuned vLLM, MTP OFF** (frees 7.5 GiB): KV 5 → 12–16 GiB **bf16** (fp8 KV is rejected by
+    Flash-Next's sparse-attention layer — B03 finding), prefix caching only via experimental `--mamba-cache-mode align`,
     context cap 16 k with compaction, max-num-seqs = KV-feasible concurrency, prefix caching ON (test hybrid-model support),
     MTP 2 vs 3.
   - **B: Qwen3.8-27B-FP8** (31 GB, 16 full-attn layers × 4 KV heads ⇒ 64 KiB/token bf16, **≈ 55–60 GiB KV ≈ 0.9–1.8 M tokens**):
@@ -68,6 +69,10 @@ the hidden LB, 3.20 → 3.71) · keep AGENTFIX F1–F3 + v7.1 state fix. Expecte
   compacted history, cap tool-output printing. Target ≤ 8 k prompt tokens median (today ~19.6 k).
 - **Time allocation**: progress-aware scheduler — games that just cleared a level get priority; games stagnant for N turns
   on level 1 get fewer tokens (but never starve below the 15-min interaction kill).
+
+> **B03 update (09-27):** 27B-FP8 on vLLM 0.19 measured 439 tok/s (48.8 GiB KV, 25 running, 0 waiting) vs Flash-Next
+> MTP-off 722 tok/s (Thuitanium) — Flash-Next MTP-off is the favourite on both throughput and model quality (median LB
+> 3.21 vs 1.56 by family). The 27B stays as the fine-tuning path (M4) and fallback.
 
 ### M2 — Decision quality (retained reasoning + verified memory)
 - Keep `<think>` of the last K turns (`preserve_thinking`); replace blind eviction with a **model-written, harness-verified
