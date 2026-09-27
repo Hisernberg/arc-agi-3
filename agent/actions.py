@@ -514,8 +514,7 @@ class ActionChannel:
         if frame is None:
             return False
         for bar in self.P.hud.bars:
-            reg = bar.region()
-            if int((np.asarray(frame)[reg] == bar.a).sum()) <= 3 * max(1, bar.hi - bar.lo + 1):
+            if bar.remaining(frame) <= 2 * max(bar.tick_px, bar.hi - bar.lo + 1):
                 return True
         return False
 

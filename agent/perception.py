@@ -628,6 +628,11 @@ class HudBar:
     ticks: int = 1
     last_step: int = 0
     edge: bool = False  # confirmed by the outermost-line rule (else by two ticks)
+    tick_px: int = 1  # largest tick seen (cells flipped by one action)
+
+    def remaining(self, frame: np.ndarray) -> int:
+        """Cells of the bar still showing the pre-tick colour (budget left, in cells)."""
+        return int((np.asarray(frame)[self.region()] == self.a).sum())
 
     def region(self) -> np.ndarray:
         m = np.zeros((H, W), bool)
@@ -703,6 +708,7 @@ class HudTracker:
                 continue
             bar.ticks += 1
             bar.last_step = self.step
+            bar.tick_px = max(bar.tick_px, (r1 - r0 + 1) * (c1 - c0 + 1))
             self._extend(bar, cur, (r0, c0, r1, c1))
             used.append(bl)
         self.pending = (self.pending + new_pending)[-32:]
