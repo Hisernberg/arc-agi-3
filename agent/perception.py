@@ -38,7 +38,7 @@ import numpy as np
 __all__ = [
     "to_grid", "to_frames", "norm_action", "action_label", "frame_delta", "delta_text", "Delta",
     "detect_scale", "Comp", "Segmentation", "segment", "ObjEvent", "object_diff", "HudTracker",
-    "AvatarTracker", "ClickCandidate", "rank_click_candidates", "candidates_text", "animation_summary",
+    "AvatarTracker", "ClickCandidate", "rank_click_candidates", "candidates_text", "shown_types", "animation_summary",
     "Percept", "Perceiver", "describe", "masked_hash", "approx_tokens", "click_point", "DIR_NAMES",
 ]
 
@@ -1039,7 +1039,7 @@ def rank_click_candidates(seg: Segmentation, hud_mask: Optional[np.ndarray] = No
                           max_n: int = 64, include_bg: bool = True,
                           live_shapes: Optional[Counter] = None,
                           dead_inst: Optional[Counter] = None,
-                          live_pos: Optional[dict] = None, live_k: int = 3) -> list[ClickCandidate]:
+                          live_pos: Optional[dict] = None) -> list[ClickCandidate]:
     """One ACTION6 candidate per non-background object (deduplicated per grid cell).
 
     Prior score per object (generic, not tuned per game): size in grid cells (1-64 cells best; sub-cell
@@ -1047,8 +1047,7 @@ def rank_click_candidates(seg: Segmentation, hud_mask: Optional[np.ndarray] = No
     tiles/buttons are good; masses of 1-cell specks are texture), compactness, background colour (holes)
     and frame-edge contact (borders) are penalised, and tiny pieces packed inside a multi-colour
     composite are penalised. History: types whose clicks changed something (``live``) come first with
-    up to ``live_k`` instances each, then the best instance of every untested type, then all remaining
-    instances; same-shape objects of another colour get a boost (``live_shapes``: toggles often
+    all their instances; same-shape objects of another colour get a boost (``live_shapes``: toggles often
     recolour). A clicked instance that did nothing (``dead_inst``, keyed (type, r0, c0)) sinks at once;
     its whole type sinks after max(2, m/3) dead clicks (one if it has a single instance), unless it
     was ever live - the same type can play different roles (reference picture vs board). Instances of a
@@ -1151,14 +1150,7 @@ def rank_click_candidates(seg: Segmentation, hud_mask: Optional[np.ndarray] = No
         seen_cells.add(cellkey)
         i = order_idx[c.id]
         adj = sc - (0.05 if status == "live" else 0.9) * i
-        # tiers: a few instances of each live type, then the best instance of every untested type, then
-        # the remaining instances, then dead ones (a flood of live copies must not bury a new button)
-        if status == "dead":
-            tier = 3
-        elif status == "live":
-            tier = 0 if i < live_k else 2
-        else:
-            tier = 1 if i == 0 else 2
+        tier = {"live": 0, "untested": 1, "dead": 2}[status]
         cands.append(((tier, -adj, c.r0, c.c0), ClickCandidate(x, y, c, c.ctype, type_count[c.ctype], round(adj, 3), status)))
     cands.sort(key=lambda t: t[0])
     ordered = [k for _, k in cands]
@@ -1176,27 +1168,48 @@ def rank_click_candidates(seg: Segmentation, hud_mask: Optional[np.ndarray] = No
             st = "live" if live[key] else ("dead" if dead[key] else "untested")
             bgcand = ClickCandidate(x, y, c, key, 1, -9.0, st, len(type_rank))
             if st == "live":
-                pos = sum(1 for _, k in cands if k.status == "live" and _[0] == 0)
+                pos = sum(1 for k in ordered if k.status == "live")
                 ordered.insert(pos, bgcand)
             else:
                 ordered.append(bgcand)
     return ordered[:max_n]
 
 
-def candidates_text(cands: list[ClickCandidate], k: int = 6, max_pos: int = 3) -> str:
-    """Candidates grouped by type, best first: ``c11 3x3 x8 @(36,36)(44,36)(52,36)..; c14 8x8 @(4,29)``.
-    ``+`` = clicks on this type changed something before, ``-`` = they did nothing."""
+def shown_types(cands: list[ClickCandidate], k_live: int = 4, k_new: int = 4) -> list[str]:
+    """Types shown to the LLM: up to ``k_live`` live types then up to ``k_new`` untested types (slots
+    are reserved so a flood of live types cannot hide a never-tried object), in candidate order."""
+    live, new = [], []
+    for cd in cands:
+        if cd.ctype.startswith("bg:") or cd.ctype in live or cd.ctype in new:
+            continue
+        if cd.status == "live" and len(live) < k_live:
+            live.append(cd.ctype)
+        elif cd.status == "untested" and len(new) < k_new:
+            new.append(cd.ctype)
+    return live + new
+
+
+def candidates_text(cands: list[ClickCandidate], k_live: int = 4, k_new: int = 4, max_pos: int = 3) -> str:
+    """Candidates grouped by type: ``c11 3x3+ x8 @(36,36)(44,36)(52,36)..; c14 8x8 @(4,29)``.
+    ``+`` = clicking this type changed something before; unmarked = untested. Dead types are only counted."""
     groups: dict[str, list[ClickCandidate]] = {}
     for cd in cands:
         if not cd.ctype.startswith("bg:"):
             groups.setdefault(cd.ctype, []).append(cd)
     parts = []
-    for ct, lst in list(groups.items())[:k]:
+    for ct in shown_types(cands, k_live, k_new):
+        lst = groups[ct]
         c = lst[0].comp
-        st = {"live": "+", "dead": "-", "untested": ""}[lst[0].status]
+        st = "+" if lst[0].status == "live" else ""
         pos = "".join(f"({q.x},{q.y})" for q in lst[:max_pos]) + (".." if len(lst) > max_pos else "")
         mult = f" x{lst[0].count}" if lst[0].count > 1 else ""
         parts.append(f"c{c.color} {c.w}x{c.h}{st}{mult} @{pos}")
+    n_dead = sum(1 for lst in groups.values() if lst[0].status == "dead")
+    bgl = [cd for cd in cands if cd.ctype.startswith("bg:")]
+    if bgl and bgl[0].status == "live":
+        parts.append(f"empty space+ e.g. ({bgl[0].x},{bgl[0].y})")
+    if n_dead:
+        parts.append(f"{n_dead} types did nothing")
     return "; ".join(parts)
 
 
@@ -1430,7 +1443,7 @@ class Perceiver:
         at = self.avatar_text(frame)
         if at:
             out.append(at)
-        ct = candidates_text(self.candidates(frame), k=k)
+        ct = candidates_text(self.candidates(frame))
         if ct:
             out.append("click targets: " + ct)
         return "\n".join(out)

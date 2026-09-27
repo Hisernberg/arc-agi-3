@@ -12,8 +12,9 @@ Date 2026-09-27 · CPU only (mock LLM) · code: `agent/duck/src/ARC3-Inference/i
 - **Memory (M1 + M2, opt-in)**: retained reasoning of the last K=2 assistant turns, a harness-verified
   facts block (≤ 2,100 chars), compacted history prompts and a 12,000-token trimming budget (was 26,112).
 - **Prompt tokens/request (mock, 3 games × 40 steps): median 21,093 → 10,486 (−50 %), max 22,941 → 11,179;
-  total 2.60 M → 1.29 M for the same 120 actions.** With the 09-22 serving profile (prefill-dominated at
-  ~20 k context) that is roughly 2× more requests per GPU-hour, before any serving change (B03).
+  total 2.60 M → 1.29 M for the same 120 actions.** Since the 09-22 serving was prefill-bound at ~20 k
+  context, this should buy up to ~2× requests per GPU-hour before any serving change (expected, not yet
+  measured; B02/B03).
 - Every v9 switch off reproduces the pre-v9 requests **byte-for-byte** (golden fingerprints captured
   before the change); 27/27 Duck tests green.
 
@@ -148,6 +149,8 @@ from real moves (~50 cells): `DOWN 9x: changed 6 (~50 cells, ...), HUD/edge-only
 
 ```
 SCRATCH/venv/bin/python -m pytest tests/test_duck_offline.py tests/test_duck_prompt_memory.py -q
-SCRATCH/venv/bin/python agent/duck_offline.py --profile v9 --steps 40
-SCRATCH/venv/bin/python SCRATCH/b06/measure2.py SCRATCH/b06 40 measure40_final   # table in §3
+SCRATCH/venv/bin/python agent/duck_offline.py --compare-profiles --steps 40   # pre_v9 / patched / v9 rows
 ```
+The M1-only / M2-only rows and the Qwen-tokenizer column came from a scratch script that adds temporary
+profiles (`SCRATCH/b06/measure2.py`; `duck_offline.patch_profile` resets the `DUCK_PATCH_*` switch
+variables, so per-switch overrides must go through `PROFILES`, not the shell).

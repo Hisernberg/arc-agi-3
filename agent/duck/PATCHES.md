@@ -202,7 +202,7 @@ figure (21.1 k) rather than without (13.1 k), so it was probably rendered — **
 
 Measured (mock, ls20/vc33/ar25 x 40 steps, chars/3.5 + images by pixels; `analysis/03_prompt_memory_v9.md`):
 median prompt tokens/request **21,093 (pre_v9) -> 21,224 (P1-P3) -> 10,486 (v9 = P + M1 + M2)**, max
-22,941 -> 11,179; total prompt tokens for the 390 actions 2.60 M -> 1.29 M (-50 %).
+22,941 -> 11,179; total prompt tokens for the 120 actions (3 x 40) 2.60 M -> 1.29 M (-50 %).
 
 ## Not ported (and why)
 
