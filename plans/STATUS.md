@@ -10,5 +10,5 @@ _Last updated: 2026-09-27 09:00 UTC_
 - **Hydra-0**: built + CPU-validated (`notebooks/hydra0/`, tests `tests/test_hydra0_*.py`).
 - **HF datasets (all private, Nabidnur/)**: `arc-agi-3-traces` (replays + our run steps), `arc-agi-3-kaggle-discussions`
   (225 topics / 1,144 posts + LB history), `arc-agi-3-frontier-replays` (25 GPT-6 Astra recordings, sessions, human baselines),
-  `arc-agi-3-research` (raw web sources + docs snapshot). Pending: `arc-agi-3-kaggle-notebooks` (after notebooks sweep).
+  `arc-agi-3-research` (raw web sources + docs snapshot). `arc-agi-3-kaggle-notebooks` (1,132 notebooks indexed, 456 scored sources, 43 with outputs, solver bundles, LB; 21,581 files).
 - **Open questions for the user**: timezone for routines; confirm secrets added as environment variables.
