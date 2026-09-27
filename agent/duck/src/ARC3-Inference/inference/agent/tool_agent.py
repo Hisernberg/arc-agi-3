@@ -22,7 +22,15 @@ from inference.agent.prompts import (
     MULTIMODAL_CONTEXT_ADDENDUM,
     TOOL_CALL_FORMAT_GUIDANCE,
     VISUAL_GAME_ADDENDUM,
+    # [DUCK-PATCH P1/P2/P3] prompt v9
+    LEVEL_CLEARED_LINE_V9,
+    OPTIMIZE_ACTIONS_LINE,
+    PLAY_DISCIPLINE_ADDENDUM_V9,
+    SCORING_RULE_V9,
+    UNDO_LINE_V9,
+    VISIBLE_NOTES_LINE_V9,
 )
+from inference.agent.facts_memory import FactsLedger  # [DUCK-PATCH M2]
 
 from inference.agent.vision_context import (
     current_grid_image_enabled,
@@ -180,10 +188,125 @@ _F2_RESULT_KEYS = (
 )
 
 
+# [DUCK-PATCH M1] carried history keeps the reasoning of only the newest K assistant messages
+# (the in-flight turn always keeps its own); requests ask the template to render it.
+_M1_THINK_KEEP_DEFAULT = 2
+
+# [DUCK-PATCH M2] trimming budget in estimator tokens (json chars / 3, images at the F1 flat
+# charge). The shipped effective budget was 26,112 (32768 - 512 reply reserve - 6144 margin).
+_M2_BUDGET_DEFAULT = 9000
+# Facts-block cap, in tokens; enforced as chars = tokens * 3 (the estimator's own ratio, i.e.
+# <= ~600 tokens at the chars/3.5 reporting ratio).
+_M2_FACTS_TOKENS_DEFAULT = 700
+
+# [DUCK-PATCH M2] prefixes of the per-turn header lines a carried (old) turn prompt keeps; the
+# static instructions and the facts block of old prompts are dropped (the newest prompt has them).
+_M2_HISTORY_KEEP_PREFIXES = (
+    "The code executed",
+    "Actions ",
+    "Action span",
+    "Last executed",
+    "Executed actions",
+    "You have ",
+    "You are still",
+    "The game is over",
+    "No previous",
+    "Current state:",
+)
+_M2_FOLLOWUP_PREFIXES = ("You have not acted yet", "You did not call a tool")
+
+
 def _request_safety_margin_tokens() -> int:
     if patches.enabled("F1_IMAGES"):
         return max(0, patches.int_setting("F1_SAFETY_MARGIN", _F1_SAFETY_MARGIN_DEFAULT))
     return _REQUEST_SAFETY_MARGIN_TOKENS
+
+
+def _strip_history_reasoning(messages: list[dict[str, Any]], *, keep: int) -> list[dict[str, Any]]:
+    """[DUCK-PATCH M1] Drop ``reasoning``/``reasoning_content`` from every assistant message except
+    the newest ``keep`` ones (stock carried the reasoning of every turn until eviction)."""
+    kept = 0
+    out: list[dict[str, Any]] = []
+    for message in reversed(messages):
+        if str(message.get("role", "")) == "assistant" and (
+            message.get("reasoning") or message.get("reasoning_content")
+        ):
+            if kept < keep:
+                kept += 1
+            else:
+                message = {k: v for k, v in message.items() if k not in ("reasoning", "reasoning_content")}
+        out.append(message)
+    out.reverse()
+    return out
+
+
+def _compact_history_user_text(text: str) -> str:
+    """[DUCK-PATCH M2] An old turn prompt keeps only its per-turn header (outcome of the previous
+    sequence, state and clock lines); an old follow-up keeps its first sentence."""
+    stripped = text.strip()
+    if stripped.startswith(_M2_FOLLOWUP_PREFIXES):
+        first = stripped.split(". ", 1)[0].rstrip(".")
+        return first + "."
+    kept: list[str] = []
+    for line in stripped.splitlines():
+        if line.startswith(_M2_HISTORY_KEEP_PREFIXES):
+            kept.append(line)
+        elif line.strip() == "Current grid image:":
+            kept.append(line)
+    return "\n".join(kept) if kept else stripped[:200]
+
+
+def _compact_history_prompts(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for message in messages:
+        if str(message.get("role", "")) != "user":
+            out.append(message)
+            continue
+        content = message.get("content")
+        if isinstance(content, str):
+            message = {**message, "content": _compact_history_user_text(content)}
+        elif isinstance(content, list):
+            parts = []
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    text = str(part.get("text", ""))
+                    caption = "\n\nCurrent grid image:" if text.rstrip().endswith("Current grid image:") else ""
+                    body = re.sub(r"\n*Current grid image:\s*$", "", text)
+                    part = {**part, "text": _compact_history_user_text(body) + caption}
+                parts.append(part)
+            message = {**message, "content": parts}
+        out.append(message)
+    return out
+
+
+def _format_minutes(seconds: float) -> str:
+    minutes = max(0.0, float(seconds)) / 60.0
+    return f"{minutes:.1f}" if minutes < 10 else f"{minutes:.0f}"
+
+
+def _game_clock_line(status: dict[str, Any] | None) -> str:
+    """[DUCK-PATCH P1] Per-turn pacing line from the solver's game status."""
+    if not status:
+        return ""
+    try:
+        elapsed = float(status.get("elapsed_seconds") or 0.0)
+    except (TypeError, ValueError):
+        elapsed = 0.0
+    remaining = status.get("time_remaining_seconds")
+    line = f"Game clock: {_format_minutes(elapsed)} min used"
+    if remaining is not None:
+        try:
+            remaining = max(0.0, float(remaining))
+            total = elapsed + remaining
+            pct = round(100.0 * remaining / total) if total > 0 else 0
+            line += f", {_format_minutes(remaining)} min left ({pct}% of this game's time)"
+        except (TypeError, ValueError):
+            pass
+    line += "."
+    completed, n_levels = status.get("levels_completed"), status.get("number_of_levels")
+    if completed is not None and n_levels:
+        line += f" Levels cleared: {completed} of {n_levels}."
+    return line
 
 
 def _is_image_part(part: Any) -> bool:
@@ -458,11 +581,19 @@ def _format_model_response_meta(
 
 def _build_system_prompt(*, tool_output_tokens: int) -> str:
     prompt = "You are a coding agent solving a grid-based puzzle game."
-    prompt += GAME_OVERVIEW_ADDENDUM
+    overview = GAME_OVERVIEW_ADDENDUM
+    if patches.enabled("P1_SCORING"):
+        # [DUCK-PATCH P1] the true scoring rule + game-clock pacing replace "optimize for as few
+        # actions as possible" (depth beats efficiency; unfinished-level actions are free).
+        overview = overview.replace(OPTIMIZE_ACTIONS_LINE, SCORING_RULE_V9)
+    prompt += overview
     prompt += STRUCTURED_RUNTIME_STATE_ADDENDUM
     if current_grid_image_enabled():
         prompt += MULTIMODAL_CONTEXT_ADDENDUM
     prompt += VISUAL_GAME_ADDENDUM
+    if patches.enabled("P3_DISCIPLINE"):
+        # [DUCK-PATCH P3] reset discipline, verify-why-you-won, no video-game mapping, visible notes.
+        prompt += PLAY_DISCIPLINE_ADDENDUM_V9
     prompt += PYTHON_ADDENDUM
     prompt += COMPACT_TOOL_SESSION_ADDENDUM.format(tool_output_tokens=tool_output_tokens)
     return prompt
@@ -1088,6 +1219,10 @@ class ToolAgent:
         self._last_step_summary: dict[str, Any] | None = None
         self._last_action_result: dict[str, Any] | None = None
         self._summarized_knowledge = _empty_world_model()
+        # [DUCK-PATCH P1/M2] per-game solver status (clock, levels) and verified-facts ledger;
+        # both belong to the session and are reset with it in _ensure_session.
+        self._game_status: dict[str, Any] | None = None
+        self._facts: FactsLedger | None = None
 
     def _headers(self) -> dict[str, str]:
         api_key = (
@@ -1130,6 +1265,34 @@ class ToolAgent:
             self._last_step_summary = None
             self._last_action_result = None
             self._summarized_knowledge = _empty_world_model()
+            self._game_status = None  # [DUCK-PATCH P1/M2]
+            self._facts = None  # [DUCK-PATCH M2] a new game never inherits another game's facts
+
+    @property
+    def facts(self) -> FactsLedger | None:
+        """[DUCK-PATCH M2] the current game's verified-facts ledger (None until first used)."""
+        return self._facts
+
+    def _facts_ledger(self) -> FactsLedger:
+        if self._facts is None or self._facts.game_key != self._game_key:
+            self._facts = FactsLedger(self._game_key)
+        return self._facts
+
+    def set_game_status(self, state_path: Path, status: dict[str, Any] | None) -> None:
+        """[DUCK-PATCH P1/M2] Solver hook, called before every ``analyze``: game clock and level
+        bookkeeping (``elapsed_seconds``, ``time_remaining_seconds``, ``levels_completed``,
+        ``number_of_levels``, ``actions_per_level``, ``baseline_actions`` (None when hidden))."""
+        self._ensure_session(state_path)
+        self._game_status = dict(status) if isinstance(status, dict) else None
+
+    def _effective_budget_tokens(self) -> int:
+        budget = self._context_budget_tokens
+        if patches.enabled("M2_FACTS"):
+            # [DUCK-PATCH M2] compaction makes a much smaller trimming budget affordable.
+            lowered = patches.int_setting("M2_BUDGET", _M2_BUDGET_DEFAULT)
+            if lowered > 0:
+                budget = min(budget, max(1024, lowered))
+        return budget
 
     @property
     def total_tokens(self) -> int:
@@ -1270,6 +1433,13 @@ class ToolAgent:
             or summary.get("run_complete")
             or (wipe_on_game_over and summary.get("game_over"))
         ):
+            if patches.enabled("M2_FACTS") and (summary.get("level_transition") or summary.get("run_complete")):
+                # [DUCK-PATCH M2] archive the cleared level's last notes instead of losing them.
+                try:
+                    level = int(summary.get("level")) - (1 if summary.get("level_transition") else 0)
+                except (TypeError, ValueError):
+                    level = None
+                self._facts_ledger().archive_notes(level, self._summarized_knowledge)
             for key in (
                 "world_model",
                 "goal_model",
@@ -1281,6 +1451,15 @@ class ToolAgent:
                 self._summarized_knowledge[key] = ""
 
     def _summarized_knowledge_lines(self) -> list[str]:
+        if patches.enabled("M2_FACTS"):
+            # [DUCK-PATCH M2] the verified-facts block (harness-checked effects + level history +
+            # the model's latest notes, capped) replaces the free-form carried world model.
+            max_tokens = max(100, patches.int_setting("M2_FACTS_TOKENS", _M2_FACTS_TOKENS_DEFAULT))
+            return self._facts_ledger().render(
+                status=self._game_status,
+                notes=self._summarized_knowledge,
+                max_chars=max_tokens * 3,
+            )
         entries = [
             ("World model", self._summarized_knowledge.get("world_model", "")),
             ("Goal model", self._summarized_knowledge.get("goal_model", "")),
