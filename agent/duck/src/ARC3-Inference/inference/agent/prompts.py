@@ -136,13 +136,13 @@ SCORING_RULE_V9 = (
 # P3: reset discipline, verify-why-you-won, no video-game mapping, visible world-model updates.
 PLAY_DISCIPLINE_ADDENDUM_V9 = (
     "\n\nPlay discipline:\n"
-    "- RESET restarts the level and costs an action: never RESET at the start of a level; use it only when "
-    "the level is dead-ended.\n"
-    "- After clearing a level, first state what cleared it (which action and effect) and verify that on the "
-    "new board before relying on it.\n"
+    "- RESET restarts the level and costs an action: never RESET at a level's start; use it only when the "
+    "level is dead-ended.\n"
+    "- After clearing a level, state which action and effect cleared it, and verify that on the new board "
+    "before relying on it.\n"
     "- Do not map the game onto known video games; infer rules only from observed effects.\n"
-    "- Only labelled notes in your visible reply (`World model:`, `Plan:`, ...) are carried to later turns; "
-    "thinking is dropped as history is trimmed. Write your updates there before each tool call.\n"
+    "- Only labelled notes in your visible reply (`World model:`, `Plan:`, ...) are carried forward; thinking "
+    "is trimmed away. Write updates there before each tool call.\n"
 )
 
 # P2 (user prompt, only when UNDO is a valid action).

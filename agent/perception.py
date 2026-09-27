@@ -506,37 +506,52 @@ class ObjEvent:
         return self.after if self.after is not None else self.before
 
     def text(self) -> str:
+        """Compact: positions are (x,y) of the object's top-left cell after the event."""
         c = self.comp
         if self.kind == "moved":
             b, a = self.before, self.after
             dname = DIR_NAMES.get((int(np.sign(self.dx)), int(np.sign(self.dy)))) if (self.dx == 0 or self.dy == 0) else None
             dd = f"{dname} {max(abs(self.dx), abs(self.dy))}" if dname else f"({self.dx:+d},{self.dy:+d})"
-            return f"moved {b.short()} {dd} (x{b.c0},y{b.r0})->(x{a.c0},y{a.r0})"
+            return f"c{b.color} {b.w}x{b.h} {dd} to ({a.c0},{a.r0})"
         if self.kind == "recolored":
-            return f"recolor {c.w}x{c.h} c{self.color}>c{self.new_color} @(x{c.c0},y{c.r0})"
+            return f"c{self.color} {c.w}x{c.h} at ({c.c0},{c.r0}) now c{self.new_color}"
         if self.kind == "resized":
             b, a = self.before, self.after
             if (b.w, b.h) == (a.w, a.h):
-                return f"reshape c{self.color} {a.w}x{a.h} {b.n}>{a.n}px @(x{a.c0},y{a.r0})"
-            return f"resize c{self.color} {b.w}x{b.h}>{a.w}x{a.h} @(x{a.c0},y{a.r0})"
+                return f"c{self.color} {a.w}x{a.h} at ({a.c0},{a.r0}) reshaped {b.n}->{a.n}px"
+            return f"c{self.color} {b.w}x{b.h}->{a.w}x{a.h} at ({a.c0},{a.r0})"
         if self.kind == "spawned":
-            return f"new {c.short()} @(x{c.c0},y{c.r0})"
-        return f"gone {c.short()} @(x{c.c0},y{c.r0})"
+            return f"new c{c.color} {c.w}x{c.h} at ({c.c0},{c.r0})"
+        return f"gone c{c.color} {c.w}x{c.h} from ({c.c0},{c.r0})"
 
 
 def object_diff(seg_a: Segmentation, seg_b: Segmentation, changed: np.ndarray, max_events: int = 64) -> list[ObjEvent]:
     """Match the non-background components touched by the change mask between two segmentations."""
     if not changed.any():
         return []
-    la = np.unique(seg_a.labels[changed])
-    lb = np.unique(seg_b.labels[changed])
-    A = [seg_a.comps[i] for i in la.tolist() if not seg_a.comps[i].bg]
-    B = [seg_b.comps[i] for i in lb.tolist() if not seg_b.comps[i].bg]
-    if len(A) > 400 or len(B) > 400:  # texture explosion: skip object-level diff
+    la = [i for i in np.unique(seg_a.labels[changed]).tolist() if not seg_a.comps[i].bg]
+    lb = [i for i in np.unique(seg_b.labels[changed]).tolist() if not seg_b.comps[i].bg]
+    if len(la) > 400 or len(lb) > 400:  # texture explosion: skip object-level diff
         return []
+    # one expansion round: objects overlapping a touched object of the other frame (growth / shrink)
+    if lb:
+        la = sorted(set(la) | {i for i in np.unique(seg_a.labels[np.isin(seg_b.labels, lb)]).tolist()
+                               if not seg_a.comps[i].bg})
+    if la:
+        lb = sorted(set(lb) | {i for i in np.unique(seg_b.labels[np.isin(seg_a.labels, la)]).tolist()
+                               if not seg_b.comps[i].bg})
+    A = [seg_a.comps[i] for i in la]
+    B = [seg_b.comps[i] for i in lb]
     used_a: set[int] = set()
     used_b: set[int] = set()
     events: list[ObjEvent] = []
+    # 0) identical objects in both frames are unchanged
+    idx_b = {(c.ctype, c.r0, c.c0): c for c in B}
+    for a in A:
+        b = idx_b.get((a.ctype, a.r0, a.c0))
+        if b is not None and b.id not in used_b:
+            used_a.add(a.id)
+            used_b.add(b.id)
     # 1) identical type (colour+shape) at a different position -> moved (closest first)
     by_type_b: dict[str, list[Comp]] = defaultdict(list)
     for c in B:
@@ -612,6 +627,7 @@ class HudBar:
     end: int
     ticks: int = 1
     last_step: int = 0
+    edge: bool = False  # confirmed by the outermost-line rule (else by two ticks)
 
     def region(self) -> np.ndarray:
         m = np.zeros((H, W), bool)
@@ -636,17 +652,20 @@ class HudTracker:
     tick   = an 8-connected blob of changed cells with a single (a -> b) transition, <= ``max_tick`` cells,
              a filled rectangle of thickness <= 3, isolated (no other change within 2 cells) and not
              accompanied by the reverse transition on its own line (that is a thin object moving).
-    bar    = confirmed by two ticks from different steps with the same transition on the same line band
-             that touch each other (no gap), or at once by a tick on the outermost frame row/column when
-             that whole line holds only the two bar colours.
+    bar    = confirmed by two ticks from steps with *different actions* (a timer ticks whatever the action;
+             the trailing edge of a moving, clipped line does not) with the same transition on the same
+             line band that touch each other (no gap), or at once by a tick on the outermost frame
+             row/column when that whole line holds only the two bar colours.
     region = band x the contiguous run of bar-coloured cells through the ticks (sticky, only grows).
-    decay  = a bar that has not ticked for ``decay`` observed changes is dropped (false positives heal)."""
+    decay  = a bar that has not ticked during the last ``decay`` (edge bars) / ``decay_pair`` (other bars)
+             steps with visible changes is dropped, so false positives heal."""
 
-    def __init__(self, max_tick: int = 8, decay: int = 40):
+    def __init__(self, max_tick: int = 8, decay: int = 40, decay_pair: int = 10):
         self.max_tick = max_tick
         self.decay = decay
+        self.decay_pair = decay_pair
         self.bars: list[HudBar] = []
-        self.pending: list[tuple[int, tuple]] = []  # (step, blob) unconfirmed ticks
+        self.pending: list[tuple[int, tuple, Any]] = []  # (step, blob, action key) unconfirmed ticks
         self.step = 0
         self._mask = np.zeros((H, W), bool)
 
@@ -656,8 +675,9 @@ class HudTracker:
     def reset_pending(self) -> None:
         self.pending = []
 
-    def update(self, prev: np.ndarray, cur: np.ndarray) -> list[tuple]:
-        """Feed one settled transition (prev -> cur); returns the tick blobs attributed to bars."""
+    def update(self, prev: np.ndarray, cur: np.ndarray, action_key: Any = None) -> list[tuple]:
+        """Feed one settled transition (prev -> cur) and the key of the action that caused it (None = treat
+        every call as a different action); returns the tick blobs attributed to bars."""
         ch = prev != cur
         if not ch.any():
             return []
@@ -667,7 +687,7 @@ class HudTracker:
             a, b, r0, c0, r1, c1 = bl
             bar = self._bar_for(bl)
             if bar is None:
-                partner = self._pending_partner(bl)
+                partner = self._pending_partner(bl, action_key)
                 if partner is not None:
                     bar = self._make_bar(partner, bl)
                     self.bars.append(bar)
@@ -676,17 +696,18 @@ class HudTracker:
                     if axis is not None:
                         lo, hi = (r0, r1) if axis == "h" else (c0, c1)
                         st, en = (c0, c1) if axis == "h" else (r0, r1)
-                        bar = HudBar(a, b, axis, lo, hi, st, en)
+                        bar = HudBar(a, b, axis, lo, hi, st, en, edge=True)
                         self.bars.append(bar)
             if bar is None:
-                new_pending.append((self.step, bl))
+                new_pending.append((self.step, bl, action_key))
                 continue
             bar.ticks += 1
             bar.last_step = self.step
             self._extend(bar, cur, (r0, c0, r1, c1))
             used.append(bl)
         self.pending = (self.pending + new_pending)[-32:]
-        self.bars = [br for br in self.bars if self.step - br.last_step <= self.decay]
+        self.bars = [br for br in self.bars
+                     if self.step - br.last_step <= (self.decay if br.edge else self.decay_pair)]
         self._rebuild()
         return used
 
@@ -764,11 +785,13 @@ class HudTracker:
                 return bar
         return None
 
-    def _pending_partner(self, bl):
+    def _pending_partner(self, bl, action_key: Any = None):
         a, b, r0, c0, r1, c1 = bl
         for item in reversed(self.pending):
-            st, p = item
+            st, p, ak = item
             if st == self.step or (p[0], p[1]) != (a, b):
+                continue
+            if action_key is not None and ak == action_key:
                 continue
             _, _, q0, d0, q1, d1 = p
             if (q0, q1) == (r0, r1) and (c0 == d1 + 1 or c1 == d0 - 1):
@@ -1323,7 +1346,7 @@ class Perceiver:
             return pc
         if self.level is None:
             self.level = level
-        self.hud.update(p, cur)
+        self.hud.update(p, cur, (aid,) if aid != 6 or x is None else (6, x // 8, y // 8))
         mask = self.hud.mask()
         d = frame_delta(p, cur, mask)
         noop = d.n == 0 or (self.n_steps < 4 and self.hud.is_tick_only(p, cur))
@@ -1365,7 +1388,7 @@ class Perceiver:
             return ""
         parts = []
         for cols, (r0, c0, r1, c1) in groups:
-            s = f"{'+'.join(f'c{c}' for c in cols)} (x{c0},y{r0}) {c1 - c0 + 1}x{r1 - r0 + 1}"
+            s = f"{'+'.join(f'c{c}' for c in cols)} {c1 - c0 + 1}x{r1 - r0 + 1} at ({c0},{r0})"
             if controls:
                 ctl = self.avatar.controls(cols[0])
                 step = self.avatar.step_size(cols[0])
@@ -1412,7 +1435,7 @@ class Perceiver:
             if pc.action[0] == 6 and pc.clicked is not None and not pc.clicked.bg:
                 bits.append("type marked dead")
             return f"{head}: " + ", ".join(bits)
-        bits.append(f"{pc.delta.n} cells changed in {_fmt_bbox(pc.delta.bbox)}")
+        bits.append(f"{pc.delta.n} cells changed {_fmt_bbox(pc.delta.bbox)}")
         text = f"{head}: " + ", ".join(bits)
         budget = self.token_budget
         # raw cells first when tiny (exact), else object events, then the avatar line

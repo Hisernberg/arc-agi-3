@@ -194,7 +194,7 @@ _M1_THINK_KEEP_DEFAULT = 2
 
 # [DUCK-PATCH M2] trimming budget in estimator tokens (json chars / 3, images at the F1 flat
 # charge). The shipped effective budget was 26,112 (32768 - 512 reply reserve - 6144 margin).
-_M2_BUDGET_DEFAULT = 9000
+_M2_BUDGET_DEFAULT = 12000
 # Facts-block cap, in tokens; enforced as chars = tokens * 3 (the estimator's own ratio, i.e.
 # <= ~600 tokens at the chars/3.5 reporting ratio).
 _M2_FACTS_TOKENS_DEFAULT = 700
