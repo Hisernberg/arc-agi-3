@@ -19,7 +19,10 @@ Sources: `research/10–21`, `analysis/01`, campaign repo docs 01–16. Numbers 
 | Resets | competition mode: one `make` per game; RESET = level reset | research/12 |
 | Quota | Kaggle GPU 30 h/week (shared with other comps) → **ARC budget 15 h/week**; scoring re-runs are **not** charged | `kaggle quota`, campaign doc 14 |
 | Submissions | 1/day; failed ("Kaggle Error") submissions reportedly don't consume the slot | research/11 |
-| Public-25 vs LB | LB ≈ public-25 ÷ 3–4 for Duck-family agents; same notebook varies ±30–50 % between submissions | research/11 |
+| Public-25 vs LB | LB ≈ public-25 ÷ 3–4 for Duck-family agents; **local public-25 barely predicts LB (r = 0.16 over 41 notebooks)** | research/10, 11 |
+| LB noise | identical base notebook submitted 12×: mean 3.29, **sd 0.51**, range 2.38–4.33 → one submission can't resolve Δ < ~1 at this level | research/10 |
+| Wave-fit bug | 110 games / 28 slots / 7,920 s cap → 4 waves need ~31.7 k s but only ~28 k s remain after setup → **last wave cut short in stock Duck** | research/10 |
+| MTP cost | Flash-Next weights 81.8 GiB with MTP-3 vs **74.3 GiB with MTP off** (KV 105 k → 188 k tokens at 5 GiB); MTP off + 7 GiB KV + 28 seqs = 722 vs 359 tok/s (Thuitanium) | research/10 |
 
 **Consequences**
 1. **Depth beats efficiency.** A 7-level game: L1 = 3.6 %, L1-L3 = 21 %, L1-L5 = 54 %. Clearing one more level is worth
@@ -43,9 +46,16 @@ Sources: `research/10–21`, `analysis/01`, campaign repo docs 01–16. Numbers 
 Score ≈ (LLM decisions per game) × (quality per decision) × (action efficiency) × (time allocation). We are ~5× behind the
 top; each multiplier below is worth 1.3–3× on its own, and they compound.
 
+### M0 — "Hydra-0": combine the proven cheap wins nobody has combined (first submission, 10-03)
+Evidence-backed, config/prompt-level, each individually measured by someone: Flash-Next **MTP off** + KV 7–12 GiB +
+20–28 seqs (2× tok/s) · **wave-fit per-game budget** from measured remaining time (fixes the cut-off 4th wave) ·
+ACTION7 executable as UNDO · scoring-rule + pacing prompt lines (+28 %) · analyzer_timeout 1200 · context budget
+applied where it actually takes effect (MISTAKES #10) · keep Scott's animation-frame patch (the only patch that moved
+the hidden LB, 3.20 → 3.71) · keep AGENTFIX F1–F3 + v7.1 state fix. Expected: 5–8 LB (vs 3.29 base mean).
+
 ### M1 — Compute (target ≥ 4× decisions per game). *Highest EV, lowest research risk.*
 - **Serving A/B on real traffic** (GPU day 1): replay recorded Duck prompts as 28 concurrent multi-turn agents against
-  - **A: Flash-Next NVFP4, tuned vLLM**: KV 5 → ~11 GiB (use the ~7 GiB left unused), `--kv-cache-dtype fp8` (~2× tokens),
+  - **A: Flash-Next NVFP4, tuned vLLM, MTP OFF** (frees 7.5 GiB): KV 5 → 12+ GiB, `--kv-cache-dtype fp8` (~2× tokens),
     context cap 16 k with compaction, max-num-seqs = KV-feasible concurrency, prefix caching ON (test hybrid-model support),
     MTP 2 vs 3.
   - **B: Qwen3.8-27B-FP8** (31 GB, 16 full-attn layers × 4 KV heads ⇒ 64 KiB/token bf16, **≈ 55–60 GiB KV ≈ 0.9–1.8 M tokens**):
@@ -120,7 +130,8 @@ review must change the plan (not just tune): e.g. swap serving profile, drop a m
 
 ## 6. Experiment discipline
 - One thesis per submission; log it in `plans/EXPERIMENTS.md` before pushing (ID, change, expected Δ, falsifier).
-- Compare configs on **(a)** LB (noisy; repeat top candidates), **(b)** public-25 levels cleared + decisions/game-hour,
+- Compare configs on **(a)** LB — the only signal that matters; sd ≈ 0.5 at LB 3 → submit a candidate ≥ 2× before
+  concluding when Δ < 1, **(b)** public-25 levels cleared + decisions/game-hour (sanity + throughput only; r = 0.16 with LB),
   **(c)** CPU replay metrics (prompt tokens, invalid tool calls, wasted actions).
 - Keep a rollback candidate (the best-scoring version) re-submittable at all times.
 - After every run: post-mortem in `analysis/NN_*.md`, update `plans/STATUS.md`, `plans/MISTAKES.md`.

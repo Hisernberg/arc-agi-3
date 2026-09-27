@@ -10,3 +10,9 @@ Format: ID · date · change · expected effect · falsifier · result · decisi
 - **Falsifier**: neither beats (0) by ≥ 1.5× → the bottleneck is not KV; revisit (prefill cost of images / prompt size).
 - **Metrics**: aggregate generated tok/s, median/p90 turn latency at 28 agents, prefix-cache hit %, preemptions,
   tool-call parse validity %.
+
+## EXP-002 · planned 10-03 · Hydra-0 (combined cheap wins)
+- **Change**: stock 5.19 notebook (Scott / ours) + MTP off + KV 7–12 GiB + 20–28 seqs + wave-fit per-game budget +
+  ACTION7=UNDO executable + scoring/pacing prompt lines + analyzer_timeout 1200 + effective ctx fix.
+- **Expected**: LB ≥ 5 (base mean 3.29, sd 0.51; best public 5.19).
+- **Falsifier**: LB < 4 on two submissions → one of the combined changes hurts; bisect via CPU/mock + one GPU smoke.

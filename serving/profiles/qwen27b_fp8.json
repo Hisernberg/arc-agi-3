@@ -1,0 +1,63 @@
+{
+  "schema": 1,
+  "name": "qwen27b_fp8",
+  "description": "Arm B of EXP-001: Qwen3.8-27B-FP8 on vLLM 0.19.0, fp8 KV, prefix caching ON (mamba align), 32k context, 32 seqs, gpu util 0.93 (~52 GiB KV), native MTP 2.",
+  "runtime": {
+    "kind": "vllm019_wheelhouse",
+    "vllm_version": "0.19.0 (pip wheelhouse) + transformers 5.8.0 / huggingface_hub 1.5.0 overlay",
+    "datasets": ["driessmit1/arc3-vllm-h100-wheelhouse-v3", "keithtyser/taaf-duck-qwen38-serving-v1"],
+    "site_dir": "/tmp/vllm019-site"
+  },
+  "model": {
+    "served_model_name": "Qwen/Qwen3.8-27B-FP8",
+    "kaggle_model": "foysalemonshanto/qwen3-8-27b-fp8-repacked-v1/PyTorch/hf-fp8/1",
+    "hf_repo": "Qwen/Qwen3.8-27B-FP8@017b9c7af6b5689d5dd426a76e0bc077eb5ca20a",
+    "path_candidates": ["/kaggle/input/models/foysalemonshanto/qwen3-8-27b-fp8-repacked-v1/pytorch/hf-fp8/1"],
+    "checkpoint_gib": 28.8,
+    "architecture": "Qwen3_5ForConditionalGeneration (48 GDN + 16 full-attention layers), mtp.safetensors present"
+  },
+  "host": "127.0.0.1",
+  "port": 1234,
+  "entrypoint": ["-m", "vllm.entrypoints.openai.api_server", "--model", "{model_path}"],
+  "args": [
+    ["--served-model-name", "{served_model_name}"],
+    ["--host", "{host}"],
+    ["--port", "{port}"],
+    ["--tensor-parallel-size", "1"],
+    "--enable-auto-tool-choice",
+    ["--tool-call-parser", "qwen3_coder"],
+    ["--generation-config", "vllm"],
+    "--enable-prefix-caching",
+    ["--default-chat-template-kwargs", {"preserve_thinking": true}],
+    ["--reasoning-parser", "qwen3"],
+    ["--mamba-cache-mode", "align"],
+    ["--max-model-len", "32768"],
+    ["--kv-cache-dtype", "fp8"],
+    ["--gpu-memory-utilization", "0.93"],
+    ["--max-num-seqs", "32"],
+    ["--max-num-batched-tokens", "8192"],
+    ["--speculative-config", {"method": "mtp", "num_speculative_tokens": 2}]
+  ],
+  "env": {"USE_TF": "0", "TRANSFORMERS_NO_TF": "1", "TRANSFORMERS_NO_TORCHVISION": "1", "VLLM_NO_USAGE_STATS": "1"},
+  "client": {
+    "context_window": 32768,
+    "safety_margin": 6144,
+    "reply_reserve": 512,
+    "max_tokens": null,
+    "images_in_history": 2,
+    "yield_seconds": 60
+  },
+  "startup": {"timeout_s": 1200, "expected_s": 480},
+  "memory": {
+    "weights_gib": 28.5,
+    "kv_gib_estimate": 52,
+    "kv_dtype": "fp8_e4m3",
+    "kv_tokens_reported_at_48.8GiB": 398272,
+    "note": "08-17 keithtyser run (vLLM 0.19, util 0.90, no MTP): 28.51 GiB weights, 48.8 GiB KV = 398,272 tokens (hybrid accounting), 25 running / 0 waiting, 439 tok/s mean decode."
+  },
+  "fallback": "qwen27b_fp8_nomtp",
+  "evidence": [
+    "SCRATCH/kaggle/notebooks/keithtyser__duck-qwen3-8-27b-fp8/output/vllm-openai-server.log",
+    "vLLM v0.19.0 source: registry has Qwen3_5ForConditionalGeneration + Qwen3_5MTP; speculative 'mtp' maps qwen3_5 -> qwen3_5_mtp; no assertion against MTP + mamba 'align'"
+  ]
+}
