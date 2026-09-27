@@ -439,10 +439,11 @@ class Preflight:
                             f"{tb['stock_need_s']:.0f}s > window {tb['play_window_s']:.0f}s; the last wave gets only "
                             f"{tb['stock_last_wave_s']:.0f}s (enable DUCK_PATCH_B08_SCHEDULER or wave-fit the cap)")
         status = "FAIL" if problems else ("WARN" if warns else "PASS")
-        detail = "; ".join(problems + warns) or (
-            f"setup~{tb['setup_estimate_s']:.0f}s window={tb['play_window_s']:.0f}s smoke~{tb['smoke_gpu_h']} GPU-h"
-            + (f" fair={tb['plan']['fair_share_s']}s floor={tb['plan']['floor_s']}s cap={tb['plan']['cap_s']}s "
-               f"max_active={tb['plan']['max_active']}" if tb["scheduler"] else ""))
+        summary = (f"setup~{tb['setup_estimate_s']:.0f}s window={tb['play_window_s']:.0f}s smoke~{tb['smoke_gpu_h']} GPU-h"
+                   + (f" fair={tb['plan']['fair_share_s']}s floor={tb['plan']['floor_s']}s cap={tb['plan']['cap_s']}s "
+                      f"max_active={tb['plan']['max_active']}" if tb["scheduler"] else
+                      f" stock {tb['stock_waves']} waves, last wave {tb['stock_last_wave_s']:.0f}s"))
+        detail = "; ".join(problems + warns + [summary])
         self.add("time_budget", status, detail, **tb)
 
     def check_source_dir(self) -> None:
