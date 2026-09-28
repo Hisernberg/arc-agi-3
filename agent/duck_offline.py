@@ -148,6 +148,12 @@ PROFILES: dict[str, dict[str, str]] = {
     "shipped": {"DUCK_PATCHES": "1", "DUCK_PATCHES_V9": "0", "DUCK_PATCH_F2_RESULT": "0",
                 "DUCK_PATCH_S1_STATE_KEY": "0"},
     "stock": {"DUCK_PATCHES": "0"},
+    # Hydra-1 layering (automation/hydra1): the notebook's AGENTFIX cell supplies F1/F3 (+F6/F9/F13/F19/ARM P) exactly
+    # as on Kaggle, so our duplicate source fixes F1/F2/F3 stay off; ours add S1 + v9 prompt (P1-P3) [+ M2 memory].
+    "hydra1a": {"DUCK_PATCHES": "1", "DUCK_PATCH_F1_IMAGES": "0", "DUCK_PATCH_F2_RESULT": "0",
+                "DUCK_PATCH_F3_MEMORY": "0"},
+    "hydra1b": {"DUCK_PATCHES": "1", "DUCK_PATCH_F1_IMAGES": "0", "DUCK_PATCH_F2_RESULT": "0",
+                "DUCK_PATCH_F3_MEMORY": "0", "DUCK_PATCH_M2_FACTS": "1"},
 }
 _PATCH_ENV_KEYS = ("DUCK_PATCHES", "DUCK_PATCH_F1_IMAGES", "DUCK_PATCH_F2_RESULT", "DUCK_PATCH_F3_MEMORY",
                    "DUCK_PATCH_S1_STATE_KEY", "DUCK_PATCHES_V9", "DUCK_PATCH_P1_SCORING", "DUCK_PATCH_P2_UNDO",

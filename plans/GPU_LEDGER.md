@@ -10,3 +10,5 @@ Quota at start of planning (09-27): 27.6 / 30 h used (mostly other competitions 
 |---|---|---|---|---|
 | 10-03 | EXP-001 serving A/B (suite: flashnext_tuned → qwen27b_fp8 → baseline → extras, 100-min budget) | 1.7 | | |
 | 10-03 | Hydra-0 smoke commit + submit (EXP-002) | 0.4 | | |
+| 10-04 | Hydra-1a smoke commit + submit (EXP-004) | 0.4 | | |
+| 10-05 | Hydra-1b smoke commit + submit (EXP-005) | 0.4 | | |

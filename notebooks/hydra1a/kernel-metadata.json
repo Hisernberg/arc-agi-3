@@ -1,0 +1,25 @@
+{
+  "id": "kragglenote2forwork/arc3-hydra1a",
+  "title": "ARC3 Hydra1a",
+  "code_file": "arc3-hydra1a.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_tpu": false,
+  "enable_internet": false,
+  "keywords": [],
+  "dataset_sources": [
+    "kragglenote2forwork/arc3-duck-bundle",
+    "keithtyser/qwen38-flash-next-vllm-nvfp4-runtime-v1"
+  ],
+  "kernel_sources": [],
+  "competition_sources": [
+    "arc-prize-2026-arc-agi-3"
+  ],
+  "model_sources": [
+    "keithtyser/qwen3-8-flash-next-nvfp4/PyTorch/radixark-modelopt-fp4/1"
+  ],
+  "docker_image": "gcr.io/kaggle-private-byod/python@sha256:57e612b484cf3df5026ee4dcc3cb176974b22b2bc0937fb1e16132a8be4cb13c",
+  "machine_shape": "NvidiaRtxPro6000"
+}

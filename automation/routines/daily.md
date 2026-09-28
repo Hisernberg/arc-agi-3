@@ -11,6 +11,8 @@
    - If today's UTC slot is unused AND the top queue entry is READY (CPU tests green, preflight green, thesis written)
      AND `quota` leaves ≥ 1 h beyond this week's remaining plan AND no other GPU batch kernel of the user is running:
      log the estimate in GPU_LEDGER.md → `python automation/kaggle_pipeline.py daily --dir <notebook dir> -m "<ID>: <thesis>"`.
+   - If `plans/STATUS.md` has a runbook for today (e.g. the 10-03 GPU day), follow it step by step; it may include a
+     non-submission GPU run (e.g. EXP-001) that starts only after the submission's commit run has finished.
    - If nothing is READY: do NOT burn the slot on a random re-submission; only re-submit a top-2 candidate if the
      weekly plan explicitly scheduled a variance repeat for today.
 4. Work: take the top unblocked item from `plans/BACKLOG.md`; implement + test on CPU; mark progress.

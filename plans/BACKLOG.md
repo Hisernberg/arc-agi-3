@@ -30,7 +30,9 @@ Sources of code:
 | P | ID | Item | Done-when |
 |---|---|---|---|
 | 0 | P01 | (DONE 09-27: v1+v2 private, 25 files verified) Upload private Kaggle dataset `kragglenote2forwork/arc3-serving-kit` (`automation/exp001_notebook/build_kit.py`) for EXP-001 | dataset visible via `kaggle datasets files`; notebook metadata references it |
-| 0 | P02 | Final preflight of `notebooks/hydra0/` (B09 preflight) + dry build; confirm quota refresh at 10-03 00:00 UTC | preflight green |
-| 1 | P03 | Decide EXP-001 order vs Hydra-0 on 10-03 (Hydra-0 smoke first — it doubles as the Flash-Next MTP-off startup check) | written in STATUS.md |
+| 0 | P02 | (DONE 09-28: Hydra-0 preflight green incl. --kaggle-check; attachments verified) Final preflight of `notebooks/hydra0/` (B09 preflight) + dry build; confirm quota refresh at 10-03 00:00 UTC | preflight green |
+| 1 | P03 | (DONE 09-28: runbook in STATUS.md) Decide EXP-001 order vs Hydra-0 on 10-03 (Hydra-0 smoke first — it doubles as the Flash-Next MTP-off startup check) | written in STATUS.md |
+
+| 0 | B14 | (DONE 09-28) **Hydra-1a/1b**: Hydra-0 notebook on our Duck bundle (`automation/hydra1/`), AGENTFIX layered on the vendored Duck (CPU rehearsal), private dataset `arc3-duck-bundle` | 7 tests + preflight green |
 
 ## W1+ (GPU weeks) — see MASTER_PLAN §5; refined each Saturday by the weekly routine.
