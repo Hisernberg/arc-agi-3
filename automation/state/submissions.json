@@ -4,8 +4,8 @@
   "fileName": "submission.parquet",
   "date": "2026-09-27 07:01:30.380000",
   "description": "Notebook taaf-flashnext-sheetu12b-0922 | Version 1",
-  "status": "SubmissionStatus.PENDING",
-  "publicScore": "",
+  "status": "SubmissionStatus.COMPLETE",
+  "publicScore": "3.18",
   "privateScore": ""
  },
  {

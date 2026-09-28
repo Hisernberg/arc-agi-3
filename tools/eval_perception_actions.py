@@ -155,9 +155,27 @@ def recall_at(ranks: list[Optional[int]], k: int) -> float:
 # ------------------------------------------------------------------------------------------------
 # rollouts (random / scripted) on the offline env
 # ------------------------------------------------------------------------------------------------
+_SPRITE_UID = __import__("itertools").count(1)
+
+
+def _sprite_uid(s) -> int:
+    """Stable ground-truth identity for an engine sprite. `id(s)` is NOT stable: sprites are re-created on level
+    reset (and spawned/removed in e.g. g50t), a freed address can be reused by a different sprite, and the reuse
+    pattern varies across processes — that silently merged the movement histories of unrelated sprites and made the
+    avatar GT (and the avatar test) depend on PYTHONHASHSEED."""
+    uid = getattr(s, "_eval_gt_uid", None)
+    if uid is None:
+        uid = next(_SPRITE_UID)
+        try:
+            object.__setattr__(s, "_eval_gt_uid", uid)
+        except Exception:
+            return id(s)
+    return uid
+
+
 def _sprites(env) -> dict[int, tuple]:
     try:
-        return {id(s): (s.x, s.y, s.width, s.height) for s in env.game.current_level.get_sprites()}
+        return {_sprite_uid(s): (s.x, s.y, s.width, s.height) for s in env.game.current_level.get_sprites()}
     except Exception:
         return {}
 
